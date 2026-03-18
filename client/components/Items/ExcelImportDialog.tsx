@@ -1,0 +1,820 @@
+import { useState } from "react";
+import { Upload, X, AlertCircle, CheckCircle2 } from "lucide-react";
+import * as XLSX from "xlsx";
+
+interface ExcelImportDialogProps {
+  onClose: () => void;
+  onSuccess: (newItems: any[]) => void;
+}
+
+interface ParsedItem {
+  itemId?: string; // Optional - if provided, item will be updated
+  itemName: string;
+  group: string;
+  category: string;
+  shortCode?: string;
+  description?: string;
+  hsnCode?: string;
+  unitType: string;
+  saleType: "QTY" | "KG";
+  profitMargin: number;
+  gst: number;
+  itemType: "Goods" | "Service";
+  variations: Array<{
+    name: string;
+    value: string;
+    price: number;
+    sapCode: string;
+    saleType: "QTY" | "KG";
+    profitMargin: number;
+  }>;
+}
+
+// Helper function to normalize variation values for matching
+const normalizeVariationValue = (value: string): string => {
+  return value
+    .toLowerCase()
+    .replace(/\s+/g, "") // Remove all spaces
+    .trim();
+};
+
+export default function ExcelImportDialog({
+  onClose,
+  onSuccess,
+}: ExcelImportDialogProps) {
+  const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [step, setStep] = useState<"upload" | "preview" | "confirm">("upload");
+  const [importedCount, setImportedCount] = useState(0);
+  const [updatedCount, setUpdatedCount] = useState(0);
+  const [skippedCount, setSkippedCount] = useState(0);
+
+  const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFile = e.target.files?.[0];
+    if (!selectedFile) return;
+
+    setError(null);
+    setFile(selectedFile);
+
+    try {
+      const workbook = XLSX.read(await selectedFile.arrayBuffer(), {
+        type: "array",
+      });
+      const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+      const data = XLSX.utils.sheet_to_json(worksheet);
+
+      if (data.length === 0) {
+        setError("Excel file is empty");
+        return;
+      }
+
+      // Validate required columns (Item ID and Short Code are optional)
+      const requiredColumns = [
+        "Item Name",
+        "Group",
+        "Category",
+        "Variation Name",
+        "Variation Value",
+        "Base Price",
+        "SAP Code",
+      ];
+      const firstRow = data[0];
+      const missingColumns = requiredColumns.filter((col) => !(col in firstRow));
+
+      if (missingColumns.length > 0) {
+        setError(
+          `Missing required columns: ${missingColumns.join(", ")}\n\nRequired: ${requiredColumns.join(", ")}\n\nOptional: Item ID (to update existing items), Short Code (will be auto-generated if not provided)`
+        );
+        return;
+      }
+
+      // Show preview of first 5 rows
+      setPreview(data.slice(0, 5));
+      setStep("preview");
+    } catch (err) {
+      setError(
+        `Failed to read Excel file: ${err instanceof Error ? err.message : "Unknown error"}`
+      );
+    }
+  };
+
+  const parseExcelData = (data: any[]): ParsedItem[] => {
+    const itemsMap = new Map<string, ParsedItem>();
+
+    data.forEach((row) => {
+      const itemName = row["Item Name"]?.toString().trim();
+      const group = row["Group"]?.toString().trim();
+      const category = row["Category"]?.toString().trim();
+      const itemId = row["Item ID"]?.toString().trim(); // Optional, for updates
+
+      if (!itemName || !group || !category) return;
+
+      // Use Item ID as key if provided, otherwise use Item Name
+      const key = itemId || itemName;
+      if (!itemsMap.has(key)) {
+        itemsMap.set(key, {
+          itemId: itemId, // Include itemId if provided
+          itemName,
+          group,
+          category,
+          shortCode: row["Short Code"]?.toString().trim() || "",
+          description: row["Description"]?.toString().trim() || "",
+          hsnCode: row["HSN Code"]?.toString().trim() || "",
+          unitType: row["Unit Type"]?.toString().trim() || "Single Count",
+          saleType: (row["Sale Type"]?.toString().toUpperCase() || "QTY") as
+            | "QTY"
+            | "KG",
+          profitMargin: parseFloat(row["Profit Margin"] || "0") || 0,
+          gst: parseFloat(row["GST"] || "0") || 0,
+          itemType: (row["Item Type"]?.toString().trim() || "Goods") as
+            | "Goods"
+            | "Service",
+          variations: [],
+        });
+      }
+
+      const item = itemsMap.get(key)!;
+      const variationName = row["Variation Name"]?.toString().trim();
+      const variationValue = row["Variation Value"]?.toString().trim();
+      const basePrice = parseFloat(row["Base Price"] || "0");
+      const sapCode = row["SAP Code"]?.toString().trim();
+
+      if (variationName && variationValue && basePrice > 0 && sapCode) {
+        item.variations.push({
+          name: variationName,
+          value: variationValue,
+          price: basePrice,
+          sapCode,
+          saleType: (row["Sale Type"]?.toString().toUpperCase() || "QTY") as
+            | "QTY"
+            | "KG",
+          profitMargin: parseFloat(row["Profit Margin"] || "0") || 0,
+        });
+      }
+    });
+
+    return Array.from(itemsMap.values());
+  };
+
+  const calculateAutoPrices = (basePrice: number) => {
+    return {
+      Zomato: Math.round((basePrice * 1.15) / 5) * 5,
+      Swiggy: Math.round((basePrice * 1.15) / 5) * 5,
+      GS1: Math.round((basePrice * 1.2) / 5) * 5,
+    };
+  };
+
+  const handleImport = async () => {
+    if (!file) return;
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      // Fetch existing items from database to check for duplicate variations
+      let existingItemsResponse;
+      try {
+        existingItemsResponse = await fetch("/api/items");
+      } catch (fetchError) {
+        setError(
+          `Network error while fetching items: ${
+            fetchError instanceof Error ? fetchError.message : "Unknown error"
+          }`
+        );
+        setLoading(false);
+        return;
+      }
+
+      if (!existingItemsResponse.ok) {
+        setError(
+          `Failed to fetch existing items: ${existingItemsResponse.status} ${existingItemsResponse.statusText}`
+        );
+        setLoading(false);
+        return;
+      }
+
+      let existingItems: any[] = [];
+      try {
+        existingItems = await existingItemsResponse.json();
+      } catch (parseError) {
+        setError(
+          `Failed to parse items data: ${
+            parseError instanceof Error ? parseError.message : "Unknown error"
+          }`
+        );
+        setLoading(false);
+        return;
+      }
+
+      // Build a map of normalized variation values from existing items
+      const existingVariationsMap = new Map<string, Set<string>>();
+      existingItems.forEach((item) => {
+        if (item.variations && Array.isArray(item.variations)) {
+          const itemName = item.itemName;
+          if (!existingVariationsMap.has(itemName)) {
+            existingVariationsMap.set(itemName, new Set());
+          }
+          const variationSet = existingVariationsMap.get(itemName)!;
+          item.variations.forEach((v: any) => {
+            // Normalize and store the variation value
+            const normalized = normalizeVariationValue(v.value);
+            variationSet.add(normalized);
+          });
+        }
+      });
+
+      const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
+      const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+      const data = XLSX.utils.sheet_to_json(worksheet);
+
+      const parsedItems = parseExcelData(data);
+
+      if (parsedItems.length === 0) {
+        setError("No valid items found in Excel file");
+        setLoading(false);
+        return;
+      }
+
+      const createdItems: any[] = [];
+      const updatedItems: any[] = [];
+      let successCount = 0;
+      let failCount = 0;
+      let skipped = 0;
+      let updatedCount = 0;
+
+      // Create or update items one by one
+      for (let index = 0; index < parsedItems.length; index++) {
+        try {
+          const item = parsedItems[index];
+
+          // Check if item should be updated (has itemId) or created
+          let existingItem = null;
+          if (item.itemId) {
+            existingItem = existingItems.find((ei) => ei.itemId === item.itemId);
+          } else {
+            existingItem = existingItems.find((ei) => ei.itemName === item.itemName);
+          }
+
+          const itemExists = !!existingItem;
+          const existingVariations = existingVariationsMap.get(item.itemName) || new Set();
+
+          // Filter out variations that already exist in the database
+          const newVariations = item.variations.filter((v) => {
+            const normalizedValue = normalizeVariationValue(v.value);
+            const alreadyExists = existingVariations.has(normalizedValue);
+
+            if (alreadyExists) {
+              console.log(
+                `⏭️ Skipping variation "${v.value}" for "${item.itemName}" - already exists in database`
+              );
+              skipped++;
+            }
+
+            return !alreadyExists;
+          });
+
+          // If all variations already exist, skip this item
+          if (newVariations.length === 0 && item.variations.length > 0) {
+            console.log(
+              `⏭️ Skipping "${item.itemName}" - all variations already exist in database`
+            );
+            continue;
+          }
+
+          // If item exists, update it (full update if itemId provided, or add variations)
+          if (itemExists && existingItem) {
+            console.log(
+              `📝 ${item.itemId ? "Updating existing" : "Adding variations to existing"} item "${item.itemName}"`
+            );
+
+            // Create variations for the new ones only
+            const variationsToAdd = newVariations.map((v, vIdx) => {
+              const autoPrices = calculateAutoPrices(v.price);
+              return {
+                id: `var-${Date.now()}-${index}-${vIdx}`,
+                name: v.name,
+                value: v.value,
+                price: v.price,
+                sapCode: v.sapCode,
+                gs1Code: "",
+                saleType: v.saleType,
+                profitMargin: v.profitMargin,
+                gs1Enabled: false,
+                channels: {
+                  Dining: v.price,
+                  Parcale: v.price,
+                  Zomato: autoPrices.Zomato,
+                  Swiggy: autoPrices.Swiggy,
+                  GS1: autoPrices.GS1,
+                },
+              };
+            });
+
+            // If itemId is provided, do a full update. Otherwise, just add variations
+            const updatePayload = item.itemId
+              ? {
+                  // Full item update
+                  itemName: item.itemName,
+                  group: item.group,
+                  category: item.category,
+                  shortCode: item.shortCode || existingItem.shortCode || "",
+                  description: item.description || existingItem.description || "",
+                  hsnCode: item.hsnCode || existingItem.hsnCode || "",
+                  unitType: item.unitType || existingItem.unitType,
+                  saleType: item.saleType || existingItem.saleType,
+                  profitMargin: item.profitMargin || existingItem.profitMargin || 0,
+                  gst: item.gst || existingItem.gst || 0,
+                  itemType: item.itemType || existingItem.itemType,
+                  variations: [...(existingItem.variations || []), ...variationsToAdd],
+                }
+              : {
+                  // Just update variations
+                  variations: [...(existingItem.variations || []), ...variationsToAdd],
+                };
+
+            // Update the existing item
+            try {
+              const updateResponse = await fetch(`/api/items/${existingItem.itemId}`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(updatePayload),
+              });
+
+              if (updateResponse.ok) {
+                const updatedItem = await updateResponse.json();
+                updatedItems.push(updatedItem);
+                updatedCount++;
+                successCount++;
+                console.log(`✅ Updated item ${existingItem.itemId}`);
+              } else {
+                failCount++;
+                console.error(
+                  `Failed to update ${item.itemName}: ${updateResponse.status} ${updateResponse.statusText}`
+                );
+              }
+            } catch (err) {
+              failCount++;
+              console.error(`Network error updating ${item.itemName}:`, err);
+            }
+            continue;
+          }
+
+          // Auto-generate Item ID if not provided
+          let itemId = item.shortCode || "";
+          if (!itemId) {
+            const groupPrefix = item.group.substring(0, 3).toUpperCase();
+            const namePrefix = item.itemName.substring(0, 3).toUpperCase();
+            const timestamp = Date.now();
+            const counter = String(index).padStart(3, "0");
+            itemId = `${groupPrefix}-${namePrefix}-${timestamp}-${counter}`;
+          }
+
+          // Auto-generate Short Code if not provided
+          let shortCode = item.shortCode || "";
+          if (!shortCode) {
+            // Generate from first letters of item name
+            const words = item.itemName.split(/\s+/);
+            shortCode = words.map(w => w[0]).join("").toUpperCase();
+            if (shortCode.length < 2) {
+              shortCode = item.itemName.substring(0, 3).toUpperCase();
+            }
+          }
+
+          // Convert variations to item variations with channels
+          const variations = newVariations.map((v, vIdx) => {
+            const autoPrices = calculateAutoPrices(v.price);
+            return {
+              id: `var-${Date.now()}-${index}-${vIdx}`,
+              name: v.name,
+              value: v.value,
+              price: v.price,
+              sapCode: v.sapCode,
+              gs1Code: "",
+              saleType: v.saleType,
+              profitMargin: v.profitMargin,
+              gs1Enabled: false,
+              channels: {
+                Dining: v.price,
+                Parcale: v.price,
+                Zomato: autoPrices.Zomato,
+                Swiggy: autoPrices.Swiggy,
+                GS1: autoPrices.GS1,
+              },
+            };
+          });
+
+          const itemToCreate = {
+            itemId,
+            itemName: item.itemName,
+            shortCode: shortCode,
+            description: item.description || "",
+            hsnCode: item.hsnCode || "",
+            group: item.group,
+            category: item.category,
+            profitMargin: item.profitMargin,
+            gst: item.gst,
+            itemType: item.itemType,
+            unitType: item.unitType,
+            variations,
+            images: [],
+          };
+
+          try {
+            const response = await fetch("/api/items", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(itemToCreate),
+            });
+
+            if (response.ok) {
+              try {
+                const createdItem = await response.json();
+                createdItems.push(createdItem);
+                successCount++;
+              } catch (parseErr) {
+                failCount++;
+                console.error(`Failed to parse response for ${item.itemName}:`, parseErr);
+              }
+            } else {
+              failCount++;
+              console.error(
+                `Failed to create ${item.itemName}: ${response.status} ${response.statusText}`
+              );
+            }
+          } catch (networkErr) {
+            failCount++;
+            console.error(`Network error creating ${item.itemName}:`, networkErr);
+          }
+        } catch (err) {
+          failCount++;
+          console.error(`Error creating ${item.itemName}:`, err);
+        }
+      }
+
+      setImportedCount(successCount - updatedCount); // Only count new items
+      setUpdatedCount(updatedCount);
+      setSkippedCount(skipped);
+      setStep("confirm");
+
+      if (successCount > 0) {
+        setTimeout(() => {
+          // Return both created and updated items, filtered to ensure they have itemId
+          const validItems = [...createdItems, ...updatedItems].filter(item => item && item.itemId);
+          console.log(`📦 Returning ${validItems.length} valid items to component`);
+          onSuccess(validItems);
+          onClose();
+        }, 1500);
+      } else if (failCount > 0) {
+        setError(`Failed to import ${failCount} items. Please check your data.`);
+        setStep("preview");
+      }
+    } catch (err) {
+      setError(
+        `Import failed: ${err instanceof Error ? err.message : "Unknown error"}`
+      );
+      setStep("preview");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const downloadTemplate = () => {
+    const template = [
+      {
+        "Item Name": "Anjeer Roll",
+        "Group": "Sweets",
+        "Category": "Dry Fruits",
+        "Short Code": "AR",
+        "Description": "Premium dry fruit roll",
+        "HSN Code": "1234",
+        "Unit Type": "Single Count",
+        "Sale Type": "QTY",
+        "Profit Margin": "20",
+        "GST": "5",
+        "Item Type": "Goods",
+        "Variation Name": "Size",
+        "Variation Value": "250 Gms",
+        "Base Price": "100",
+        "SAP Code": "SAP001",
+      },
+      {
+        "Item Name": "Anjeer Roll",
+        "Group": "Sweets",
+        "Category": "Dry Fruits",
+        "Short Code": "AR",
+        "Description": "Premium dry fruit roll",
+        "HSN Code": "1234",
+        "Unit Type": "Single Count",
+        "Sale Type": "QTY",
+        "Profit Margin": "20",
+        "GST": "5",
+        "Item Type": "Goods",
+        "Variation Name": "Size",
+        "Variation Value": "500 Gms",
+        "Base Price": "180",
+        "SAP Code": "SAP002",
+      },
+      {
+        "Item Name": "Kaju Barfi",
+        "Group": "Sweets",
+        "Category": "Traditional",
+        "Short Code": "KB",
+        "Description": "Hand-made kaju barfi",
+        "HSN Code": "5678",
+        "Unit Type": "Single Count",
+        "Sale Type": "QTY",
+        "Profit Margin": "25",
+        "GST": "5",
+        "Item Type": "Goods",
+        "Variation Name": "Weight",
+        "Variation Value": "500 Gms",
+        "Base Price": "250",
+        "SAP Code": "SAP003",
+      },
+      {
+        "Item Name": "Kaju Barfi",
+        "Group": "Sweets",
+        "Category": "Traditional",
+        "Short Code": "KB",
+        "Description": "Hand-made kaju barfi",
+        "HSN Code": "5678",
+        "Unit Type": "Single Count",
+        "Sale Type": "QTY",
+        "Profit Margin": "25",
+        "GST": "5",
+        "Item Type": "Goods",
+        "Variation Name": "Weight",
+        "Variation Value": "1 KG",
+        "Base Price": "450",
+        "SAP Code": "SAP004",
+      },
+    ];
+
+    const ws = XLSX.utils.json_to_sheet(template);
+
+    // Set header styling with proper column order
+    const headers = [
+      "Item Name",
+      "Group",
+      "Category",
+      "Short Code",
+      "Description",
+      "HSN Code",
+      "Unit Type",
+      "Sale Type",
+      "Profit Margin",
+      "GST",
+      "Item Type",
+      "Variation Name",
+      "Variation Value",
+      "Base Price",
+      "SAP Code",
+    ];
+
+    // Add header validation note
+    headers.forEach((header, idx) => {
+      const cellRef = XLSX.utils.encode_cell({ r: 0, c: idx });
+      if (!ws[cellRef]) {
+        ws[cellRef] = { t: "s", v: header };
+      }
+    });
+
+    // Set column widths for better readability
+    const colWidths = [18, 12, 15, 10, 20, 10, 14, 10, 12, 8, 10, 14, 14, 11, 10];
+    ws["!cols"] = colWidths.map(w => ({ wch: w }));
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Items Template");
+    XLSX.writeFile(wb, "item-import-template.xlsx");
+  };
+
+  return (
+    <div className="fixed inset-0 bg-black/90 backdrop-blur-md z-50 flex items-center justify-center p-4">
+      <div className="bg-gray-900 rounded-2xl max-w-2xl w-full shadow-2xl shadow-black/60 border border-gray-800 backdrop-blur-xl overflow-hidden">
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-800">
+          <h2 className="text-xl font-bold text-white">Import Items from Excel</h2>
+          <button
+            onClick={onClose}
+            className="p-2 hover:bg-gray-800 rounded-lg transition-colors"
+          >
+            <X className="w-5 h-5 text-gray-400" />
+          </button>
+        </div>
+
+        {/* Content */}
+        <div className="p-6">
+          {step === "upload" && (
+            <div className="space-y-4">
+              <div className="p-8 border-2 border-dashed border-gray-700 rounded-xl text-center hover:border-gray-600 transition-colors">
+                <Upload className="w-12 h-12 text-gray-400 mx-auto mb-3" />
+                <p className="text-gray-300 font-medium mb-2">
+                  Drop your Excel file here or click to browse
+                </p>
+                <p className="text-gray-500 text-sm mb-4">
+                  Supported format: .xlsx, .xls
+                </p>
+                <input
+                  type="file"
+                  accept=".xlsx,.xls"
+                  onChange={handleFileSelect}
+                  className="hidden"
+                  id="file-input"
+                />
+                <label htmlFor="file-input">
+                  <button
+                    onClick={() =>
+                      document.getElementById("file-input")?.click()
+                    }
+                    className="px-6 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium transition-colors"
+                  >
+                    Select File
+                  </button>
+                </label>
+
+                {file && (
+                  <p className="text-green-400 text-sm mt-3">
+                    ✓ {file.name} selected
+                  </p>
+                )}
+              </div>
+
+              {/* Expected Format */}
+              <div className="p-4 bg-gray-800/50 border border-gray-700 rounded-lg space-y-3">
+                <p className="text-gray-300 font-semibold text-sm">Expected Format:</p>
+                <div className="grid grid-cols-2 gap-2 text-xs text-gray-400">
+                  <div>
+                    <p className="text-gray-300 font-medium mb-1">Required Columns:</p>
+                    <ul className="space-y-1">
+                      <li>✓ Item Name</li>
+                      <li>✓ Group</li>
+                      <li>✓ Category</li>
+                      <li>✓ Variation Name</li>
+                      <li>✓ Variation Value</li>
+                      <li>✓ Base Price</li>
+                      <li>✓ SAP Code</li>
+                    </ul>
+                  </div>
+                  <div>
+                    <p className="text-gray-300 font-medium mb-1">Optional Columns:</p>
+                    <ul className="space-y-1">
+                      <li>- Item ID (for updates)</li>
+                      <li>- Short Code</li>
+                      <li>- Description</li>
+                      <li>- HSN Code</li>
+                      <li>- Unit Type</li>
+                      <li>- Sale Type (QTY/KG)</li>
+                      <li>- Profit Margin</li>
+                      <li>- GST</li>
+                      <li>- Item Type</li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+
+              {/* Smart Features */}
+              <div className="p-3 bg-green-500/10 border border-green-500/30 rounded-lg">
+                <p className="text-green-300 text-xs">
+                  ✨ <strong>Smart Features:</strong> Duplicate variations (250Gms = 250GMS = 250 GMS) are automatically detected and skipped. Include Item ID to update existing items with full data changes, or just add new variations to them.
+                </p>
+              </div>
+
+              <div className="flex gap-3">
+                <button
+                  onClick={downloadTemplate}
+                  className="flex-1 px-4 py-2 border border-gray-700 text-gray-300 hover:bg-gray-800 rounded-lg font-medium transition-colors"
+                >
+                  📥 Download Template
+                </button>
+                <button
+                  onClick={onClose}
+                  className="flex-1 px-4 py-2 border border-gray-700 text-gray-300 hover:bg-gray-800 rounded-lg font-medium transition-colors"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
+
+          {step === "preview" && (
+            <div className="space-y-4">
+              {error && (
+                <div className="p-4 bg-red-500/10 border border-red-500/30 rounded-lg flex gap-3">
+                  <AlertCircle className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-red-300 font-medium">Import Error</p>
+                    <p className="text-red-200 text-sm whitespace-pre-wrap mt-1">
+                      {error}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <p className="text-gray-300 font-medium mb-3">Preview (First 5 rows) - Item ID & Short Code will be auto-generated</p>
+                <div className="max-h-64 overflow-y-auto">
+                  <table className="w-full text-sm">
+                    <thead className="sticky top-0">
+                      <tr className="bg-gray-800/50 border-b border-gray-700">
+                        {[
+                          "Item Name",
+                          "Group",
+                          "Category",
+                          "Variation",
+                          "Price",
+                          "SAP Code",
+                        ].map((col) => (
+                          <th
+                            key={col}
+                            className="px-3 py-2 text-left text-gray-400 font-medium text-xs"
+                          >
+                            {col}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {preview.map((row, idx) => (
+                        <tr key={idx} className="border-b border-gray-800 hover:bg-gray-800/30">
+                          <td className="px-3 py-2 text-gray-300 text-xs">
+                            {row["Item Name"]}
+                          </td>
+                          <td className="px-3 py-2 text-gray-400 text-xs">
+                            {row["Group"]}
+                          </td>
+                          <td className="px-3 py-2 text-gray-400 text-xs">
+                            {row["Category"]}
+                          </td>
+                          <td className="px-3 py-2 text-gray-400 text-xs">
+                            {row["Variation Name"]} - {row["Variation Value"]}
+                          </td>
+                          <td className="px-3 py-2 text-gray-300 text-xs">
+                            ₹{row["Base Price"]}
+                          </td>
+                          <td className="px-3 py-2 text-gray-400 text-xs">
+                            {row["SAP Code"]}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className="flex gap-3">
+                <button
+                  onClick={() => {
+                    setFile(null);
+                    setPreview([]);
+                    setError(null);
+                    setStep("upload");
+                  }}
+                  className="flex-1 px-4 py-2 border border-gray-700 text-gray-300 hover:bg-gray-800 rounded-lg font-medium transition-colors"
+                >
+                  Back
+                </button>
+                <button
+                  onClick={handleImport}
+                  disabled={loading || !file}
+                  className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-lg font-medium transition-colors"
+                >
+                  {loading ? "Importing..." : "Import Items"}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {step === "confirm" && (
+            <div className="space-y-4 text-center py-6">
+              <div className="flex justify-center">
+                <CheckCircle2 className="w-16 h-16 text-green-400" />
+              </div>
+              <div>
+                <p className="text-2xl font-bold text-white mb-2">
+                  Import Complete!
+                </p>
+                {importedCount > 0 && (
+                  <p className="text-gray-300">
+                    ✨ {importedCount} new item{importedCount !== 1 ? "s" : ""} created successfully
+                  </p>
+                )}
+                {updatedCount > 0 && (
+                  <p className="text-gray-300">
+                    📝 {updatedCount} existing item{updatedCount !== 1 ? "s" : ""} updated successfully
+                  </p>
+                )}
+                {skippedCount > 0 && (
+                  <p className="text-gray-400 text-sm mt-2">
+                    ⏭️ {skippedCount} variation{skippedCount !== 1 ? "s" : ""} skipped (already exist in database)
+                  </p>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}

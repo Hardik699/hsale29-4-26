@@ -1,0 +1,252 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>POS Pricing Management</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  * { box-sizing: border-box; }
+  body { background: #0a0f1e; color: #e2e8f0; font-family: 'Inter', system-ui, sans-serif; margin: 0; }
+
+  .table-container {
+    overflow: auto;
+    max-height: calc(100vh - 140px);
+    border-radius: 12px;
+    border: 1px solid #1e2d4a;
+    position: relative;
+  }
+
+  table { border-collapse: separate; border-spacing: 0; width: max-content; min-width: 100%; }
+
+  /* Sticky top headers */
+  thead tr:first-child th { position: sticky; top: 0; z-index: 30; background: #0d1526; }
+  thead tr:nth-child(2) th { position: sticky; top: 41px; z-index: 30; background: #0d1526; }
+
+  /* Sticky left columns: checkbox, name, group, category, action */
+  th.sticky-col, td.sticky-col { position: sticky; z-index: 20; background: #0d1526; }
+  tr:hover td.sticky-col { background: #111d35 !important; }
+
+  th.sticky-col { z-index: 40; }
+  thead tr:first-child th.sticky-col { z-index: 50; }
+
+  .col-check  { left: 0;    min-width: 44px;  width: 44px; }
+  .col-name   { left: 44px; min-width: 180px; width: 180px; }
+  .col-group  { left: 224px; min-width: 100px; width: 100px; }
+  .col-cat    { left: 324px; min-width: 140px; width: 140px; }
+  .col-action { left: 464px; min-width: 80px;  width: 80px; }
+
+  /* Shadow on last sticky col */
+  .col-action { box-shadow: 4px 0 12px rgba(0,0,0,0.5); }
+
+  th { padding: 10px 12px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: #64748b; border-bottom: 1px solid #1e2d4a; white-space: nowrap; }
+  td { padding: 9px 12px; font-size: 13px; border-bottom: 1px solid #111d35; white-space: nowrap; }
+
+  tr:hover td { background: #111d35; }
+
+  .price-cell { text-align: center; color: #94a3b8; min-width: 72px; }
+  .price-cell input {
+    width: 64px; background: #0a1628; border: 1px solid #1e2d4a; border-radius: 6px;
+    color: #e2e8f0; font-size: 12px; padding: 3px 6px; text-align: center; outline: none;
+    transition: border-color 0.15s;
+  }
+  .price-cell input:focus { border-color: #3b82f6; background: #0f1f3d; }
+
+  .section-header { text-align: center; border-left: 1px solid #1e2d4a; color: #60a5fa; font-size: 12px; font-weight: 800; letter-spacing: 0.08em; }
+  .sub-header { text-align: center; border-left: 1px solid #111d35; }
+
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 600; }
+  .badge-sweet { background: #1a1040; color: #a78bfa; }
+  .badge-savory { background: #0f2a1a; color: #34d399; }
+  .badge-drink { background: #0f1f3d; color: #60a5fa; }
+
+  .btn-edit { background: #1e3a5f; color: #60a5fa; border: none; border-radius: 6px; padding: 4px 10px; font-size: 11px; font-weight: 700; cursor: pointer; transition: background 0.15s; }
+  .btn-edit:hover { background: #2563eb; color: #fff; }
+
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: #0a0f1e; }
+  ::-webkit-scrollbar-thumb { background: #1e2d4a; border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: #2d4a7a; }
+
+  .search-input { background: #0d1526; border: 1px solid #1e2d4a; border-radius: 10px; color: #e2e8f0; padding: 9px 16px 9px 40px; font-size: 13px; outline: none; width: 300px; transition: border-color 0.15s; }
+  .search-input:focus { border-color: #3b82f6; }
+
+  .select-count { background: #1e3a5f; color: #60a5fa; border-radius: 8px; padding: 4px 12px; font-size: 12px; font-weight: 700; display: none; }
+  .select-count.visible { display: inline-block; }
+
+  .top-bar { background: #0d1526; border-bottom: 1px solid #1e2d4a; padding: 14px 20px; display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+  .title { font-size: 18px; font-weight: 800; color: #f1f5f9; letter-spacing: -0.02em; }
+  .subtitle { font-size: 12px; color: #475569; margin-top: 1px; }
+
+  .stats-pill { background: #111d35; border: 1px solid #1e2d4a; border-radius: 8px; padding: 4px 12px; font-size: 12px; color: #64748b; }
+  .stats-pill span { color: #e2e8f0; font-weight: 700; }
+</style>
+</head>
+<body>
+
+<!-- Top Bar -->
+<div class="top-bar">
+  <div>
+    <div class="title">🏪 POS Pricing Management</div>
+    <div class="subtitle">Manage channel-wise pricing for all items</div>
+  </div>
+  <div style="flex:1"></div>
+  <!-- Search -->
+  <div style="position:relative">
+    <svg style="position:absolute;left:12px;top:50%;transform:translateY(-50%);color:#475569" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+    <input class="search-input" id="searchInput" placeholder="Search by name, group, category..." oninput="filterTable()" />
+  </div>
+  <div class="stats-pill">Total: <span id="totalCount">0</span> items</div>
+  <div class="stats-pill">Showing: <span id="showCount">0</span></div>
+  <span class="select-count" id="selectCount">0 selected</span>
+</div>
+
+<!-- Table Wrapper -->
+<div style="padding: 16px;">
+  <div class="table-container" id="tableContainer">
+    <table id="mainTable">
+      <thead>
+        <!-- Row 1: Section headers -->
+        <tr>
+          <th class="sticky-col col-check" rowspan="2">
+            <input type="checkbox" id="selectAll" onchange="toggleAll(this)" style="width:16px;height:16px;cursor:pointer;accent-color:#3b82f6" />
+          </th>
+          <th class="sticky-col col-name" rowspan="2" style="text-align:left">Item Name</th>
+          <th class="sticky-col col-group" rowspan="2">Group</th>
+          <th class="sticky-col col-cat" rowspan="2">Category</th>
+          <th class="sticky-col col-action" rowspan="2">Action</th>
+          <!-- Price sections -->
+          <th class="section-header" colspan="4">1 PC</th>
+          <th class="section-header" colspan="4">1 CUP</th>
+          <th class="section-header" colspan="4">75 Gms</th>
+          <th class="section-header" colspan="4">100 Gms</th>
+          <th class="section-header" colspan="4">250 Gms</th>
+          <th class="section-header" colspan="4">500 Gms</th>
+          <th class="section-header" colspan="4">1 KG</th>
+        </tr>
+        <!-- Row 2: Sub-column headers -->
+        <tr id="subHeaderRow">
+          <!-- Generated by JS -->
+        </tr>
+      </thead>
+      <tbody id="tableBody"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const SECTIONS = ['1 PC', '1 CUP', '75 Gms', '100 Gms', '250 Gms', '500 Gms', '1 KG'];
+const CHANNELS = ['Dining', 'Parcel', 'Swiggy', 'Zomato'];
+
+const ITEMS = [
+  { name: 'Kesar Kaju Katli', group: 'Sweet', category: 'Dry Fruits Mithai' },
+  { name: 'Almond Bite', group: 'Sweet', category: 'Dry Fruits Mithai' },
+  { name: 'Anjeer Roll', group: 'Sweet', category: 'Dry Fruits Mithai' },
+  { name: 'Kaju Katli', group: 'Sweet', category: 'Dry Fruits Mithai' },
+  { name: 'Badam Katli', group: 'Sweet', category: 'Dry Fruits Mithai' },
+  { name: 'Biscoff Bites', group: 'Sweet', category: 'Dry Fruits Mithai' },
+  { name: 'Pista Roll', group: 'Sweet', category: 'Dry Fruits Mithai' },
+  { name: 'Coconut Ladoo', group: 'Sweet', category: 'Traditional Mithai' },
+  { name: 'Besan Ladoo', group: 'Sweet', category: 'Traditional Mithai' },
+  { name: 'Motichoor Ladoo', group: 'Sweet', category: 'Traditional Mithai' },
+  { name: 'Gulab Jamun', group: 'Sweet', category: 'Syrup Sweets' },
+  { name: 'Rasgulla', group: 'Sweet', category: 'Syrup Sweets' },
+  { name: 'Rasmalai', group: 'Sweet', category: 'Syrup Sweets' },
+  { name: 'Masala Chai', group: 'Beverage', category: 'Hot Drinks' },
+  { name: 'Filter Coffee', group: 'Beverage', category: 'Hot Drinks' },
+  { name: 'Cold Coffee', group: 'Beverage', category: 'Cold Drinks' },
+  { name: 'Mango Lassi', group: 'Beverage', category: 'Cold Drinks' },
+  { name: 'Samosa', group: 'Savory', category: 'Snacks' },
+  { name: 'Kachori', group: 'Savory', category: 'Snacks' },
+  { name: 'Dhokla', group: 'Savory', category: 'Snacks' },
+];
+
+// Build sub-header row
+const subHeaderRow = document.getElementById('subHeaderRow');
+SECTIONS.forEach(() => {
+  CHANNELS.forEach((ch, ci) => {
+    const th = document.createElement('th');
+    th.className = 'sub-header';
+    th.textContent = ch;
+    if (ci === 0) th.style.borderLeft = '1px solid #1e2d4a';
+    subHeaderRow.appendChild(th);
+  });
+});
+
+// Build table rows
+function buildRows(items) {
+  const tbody = document.getElementById('tableBody');
+  tbody.innerHTML = '';
+
+  items.forEach((item, idx) => {
+    const tr = document.createElement('tr');
+    tr.dataset.name = item.name.toLowerCase();
+    tr.dataset.group = item.group.toLowerCase();
+    tr.dataset.cat = item.category.toLowerCase();
+
+    const groupColor = item.group === 'Sweet' ? 'badge-sweet' : item.group === 'Beverage' ? 'badge-drink' : 'badge-savory';
+
+    tr.innerHTML = `
+      <td class="sticky-col col-check" style="text-align:center">
+        <input type="checkbox" class="row-check" onchange="updateSelectCount()" style="width:15px;height:15px;cursor:pointer;accent-color:#3b82f6" />
+      </td>
+      <td class="sticky-col col-name" style="font-weight:600;color:#f1f5f9">${item.name}</td>
+      <td class="sticky-col col-group" style="text-align:center"><span class="badge ${groupColor}">${item.group}</span></td>
+      <td class="sticky-col col-cat" style="text-align:center;color:#94a3b8;font-size:12px">${item.category}</td>
+      <td class="sticky-col col-action" style="text-align:center">
+        <button class="btn-edit" onclick="editRow(${idx})">Edit</button>
+      </td>
+      ${SECTIONS.map((sec, si) =>
+        CHANNELS.map((ch, ci) => {
+          const borderLeft = ci === 0 ? 'border-left:1px solid #1e2d4a;' : '';
+          return `<td class="price-cell" style="${borderLeft}">
+            <input type="number" placeholder="-" min="0" data-item="${idx}" data-sec="${sec}" data-ch="${ch}" onchange="priceChanged(this)" />
+          </td>`;
+        }).join('')
+      ).join('')}
+    `;
+    tbody.appendChild(tr);
+  });
+
+  document.getElementById('totalCount').textContent = ITEMS.length;
+  document.getElementById('showCount').textContent = items.length;
+}
+
+function filterTable() {
+  const q = document.getElementById('searchInput').value.toLowerCase().trim();
+  if (!q) { buildRows(ITEMS); return; }
+  const filtered = ITEMS.filter(i =>
+    i.name.toLowerCase().includes(q) ||
+    i.group.toLowerCase().includes(q) ||
+    i.category.toLowerCase().includes(q)
+  );
+  buildRows(filtered);
+}
+
+function toggleAll(cb) {
+  document.querySelectorAll('.row-check').forEach(c => c.checked = cb.checked);
+  updateSelectCount();
+}
+
+function updateSelectCount() {
+  const checked = document.querySelectorAll('.row-check:checked').length;
+  const el = document.getElementById('selectCount');
+  el.textContent = checked + ' selected';
+  el.classList.toggle('visible', checked > 0);
+  document.getElementById('selectAll').indeterminate = checked > 0 && checked < document.querySelectorAll('.row-check').length;
+  document.getElementById('selectAll').checked = checked === document.querySelectorAll('.row-check').length;
+}
+
+function editRow(idx) {
+  alert(`Edit: ${ITEMS[idx].name}`);
+}
+
+function priceChanged(input) {
+  console.log(`Price updated - Item: ${input.dataset.item}, Section: ${input.dataset.sec}, Channel: ${input.dataset.ch}, Value: ${input.value}`);
+}
+
+// Init
+buildRows(ITEMS);
+</script>
+</body>
+</html>
