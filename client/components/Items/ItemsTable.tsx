@@ -126,7 +126,7 @@ export default function ItemsTable({ items, onDelete, onSelectedChange }: ItemsT
                 rowSpan={2}
                 style={{ position: "sticky", top: 0, left: 224, zIndex: 40, background: "#0f172a", minWidth: 100 }}
                 className="px-3 py-3 text-center border-r border-b border-slate-700/50"
-                <tr key={item.itemId} onClick={() => navigate(`/items/${item.itemId}`)} className="border-b border-slate-700/30 cursor-pointer text-xs group transition-transform duration-150 ease-out hover:-translate-y-px hover:brightness-110 hover:shadow-lg hover:shadow-blue-900/20" style={{ background: bg }}>
+              >
                 Group
               </th>
               <th
