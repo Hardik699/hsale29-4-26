@@ -39,6 +39,7 @@ import {
   handleGetItemById,
   handleCreateItem,
   handleUpdateItem,
+  handleBulkUpdateSaleTypes,
   handleDeleteItem,
   handleGetDropdowns,
   handleAddGroup,
@@ -51,6 +52,7 @@ import {
   handleUpdateCategory,
   handleUpdateHsnCode,
   handleUpdateVariationValue,
+  handleGetItemLogs,
 } from "./routes/items";
 import {
   handleGetSales,
@@ -65,6 +67,7 @@ import {
   handleDebugParcelData,
   handleDebugAllData,
   handleClearAllPetpoojaData,
+  handleGetDailyReport,
 } from "./routes/sales";
 
 export function createServer() {
@@ -153,10 +156,33 @@ export function createServer() {
   app.put("/api/items/variation-values/:value", handleUpdateVariationValue);
   app.post("/api/items/migrate/add-gs1", handleAddGS1Channel);
   app.get("/api/items", handleGetItems);
+  app.get("/api/items/:itemId/logs", handleGetItemLogs);
   app.get("/api/items/:itemId", handleGetItemById);
   app.post("/api/items", handleCreateItem);
   app.put("/api/items/:itemId", handleUpdateItem);
+  app.post("/api/items/bulk-update-sale-types", handleBulkUpdateSaleTypes);
   app.delete("/api/items/:itemId", handleDeleteItem);
+
+  // Test endpoint
+  app.get("/api/test-report", (_req, res) => {
+    res.json({
+      success: true,
+      data: [
+        {
+          itemId: "TEST001",
+          itemName: "Test Item",
+          category: "Test Category",
+          group: "Sweet",
+          date: "2026-01-01",
+          zomatoQty: 2.5,
+          swiggyQty: 1.8,
+          diningQty: 4.2,
+          parcelQty: 3.1,
+        }
+      ],
+      count: 1,
+    });
+  });
 
   // Sales routes
   app.get("/api/sales/debug-raw", handleDebugItemSalesRaw);
@@ -165,6 +191,7 @@ export function createServer() {
   app.get("/api/sales", handleGetSales);
   app.get("/api/sales/restaurants", handleGetRestaurants);
   app.get("/api/sales/summary", handleGetSalesSummary);
+  app.get("/api/sales/daily-report", handleGetDailyReport);
   app.get("/api/sales/item/:itemId", handleGetItemSales);
   app.get("/api/sales/monthly/:itemId", handleGetMonthlySales);
   app.get("/api/sales/daily/:itemId/:month", handleGetDailySales);

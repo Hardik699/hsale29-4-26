@@ -70,7 +70,40 @@ export default function ExcelImportDialog({
         return;
       }
 
-      // Validate required columns (Item ID and Short Code are optional)
+      // Check if this is a Sale Type Manager file
+      const firstRow = data[0] as any;
+      const isSaleTypeManager = "New Sale Type" in firstRow && "Current Sale Type" in firstRow;
+
+      if (isSaleTypeManager) {
+        // Handle Sale Type Manager file
+        const saleTypeUpdates = data
+          .filter((row: any) => row["Item ID"] && row["New Sale Type"])
+          .map((row: any) => ({
+            itemId: row["Item ID"]?.toString().trim(),
+            sapCode: row["SAP Code"]?.toString().trim() || "",
+            newSaleType: row["New Sale Type"]?.toString().trim(),
+            currentSaleType: row["Current Sale Type"]?.toString().trim(),
+            itemName: row["Item Name"]?.toString().trim(),
+          }))
+          .filter((update: any) => 
+            update.itemId && 
+            update.newSaleType && 
+            ["QTY", "KG"].includes(update.newSaleType) &&
+            update.newSaleType !== update.currentSaleType // Only include changes
+          );
+
+        if (saleTypeUpdates.length === 0) {
+          setError("No sale type changes found in the file. Make sure to modify the 'New Sale Type' column.");
+          return;
+        }
+
+        // Show preview of sale type updates
+        setPreview(saleTypeUpdates.slice(0, 5));
+        setStep("preview");
+        return;
+      }
+
+      // Handle regular item import file
       const requiredColumns = [
         "Item Name",
         "Group",
@@ -80,7 +113,6 @@ export default function ExcelImportDialog({
         "Base Price",
         "SAP Code",
       ];
-      const firstRow = data[0];
       const missingColumns = requiredColumns.filter((col) => !(col in firstRow));
 
       if (missingColumns.length > 0) {
@@ -173,6 +205,67 @@ export default function ExcelImportDialog({
     setError(null);
 
     try {
+      const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
+      const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+      const data = XLSX.utils.sheet_to_json(worksheet);
+
+      // Check if this is a Sale Type Manager file
+      const firstRow = data[0] as any;
+      const isSaleTypeManager = "New Sale Type" in firstRow && "Current Sale Type" in firstRow;
+
+      if (isSaleTypeManager) {
+        // Handle Sale Type Manager updates
+        const saleTypeUpdates = data
+          .filter((row: any) => row["Item ID"] && row["New Sale Type"])
+          .map((row: any) => ({
+            itemId: row["Item ID"]?.toString().trim(),
+            sapCode: row["SAP Code"]?.toString().trim() || "",
+            newSaleType: row["New Sale Type"]?.toString().trim(),
+            currentSaleType: row["Current Sale Type"]?.toString().trim(),
+          }))
+          .filter((update: any) => 
+            update.itemId && 
+            update.newSaleType && 
+            ["QTY", "KG"].includes(update.newSaleType) &&
+            update.newSaleType !== update.currentSaleType // Only include changes
+          );
+
+        if (saleTypeUpdates.length === 0) {
+          setError("No sale type changes found in the file");
+          setLoading(false);
+          return;
+        }
+
+        // Send bulk update request
+        const response = await fetch("/api/items/bulk-update-sale-types", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ updates: saleTypeUpdates }),
+        });
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}));
+          setError(`Failed to update sale types: ${errorData.error || "Unknown error"}`);
+          setLoading(false);
+          return;
+        }
+
+        const result = await response.json();
+        setImportedCount(0); // No new items created
+        setUpdatedCount(result.successCount || 0);
+        setSkippedCount(result.errorCount || 0);
+        setStep("confirm");
+
+        setTimeout(() => {
+          onSuccess([]); // No new items to return
+          onClose();
+        }, 1500);
+
+        setLoading(false);
+        return;
+      }
+
+      // Handle regular item import (existing logic)
       // Fetch existing items from database to check for duplicate variations
       let existingItemsResponse;
       try {
@@ -224,10 +317,6 @@ export default function ExcelImportDialog({
           });
         }
       });
-
-      const workbook = XLSX.read(await file.arrayBuffer(), { type: "array" });
-      const worksheet = workbook.Sheets[workbook.SheetNames[0]];
-      const data = XLSX.utils.sheet_to_json(worksheet);
 
       const parsedItems = parseExcelData(data);
 
@@ -713,54 +802,107 @@ export default function ExcelImportDialog({
               )}
 
               <div>
-                <p className="text-gray-300 font-medium mb-3">Preview (First 5 rows) - Item ID & Short Code will be auto-generated</p>
-                <div className="max-h-64 overflow-y-auto">
-                  <table className="w-full text-sm">
-                    <thead className="sticky top-0">
-                      <tr className="bg-gray-800/50 border-b border-gray-700">
-                        {[
-                          "Item Name",
-                          "Group",
-                          "Category",
-                          "Variation",
-                          "Price",
-                          "SAP Code",
-                        ].map((col) => (
-                          <th
-                            key={col}
-                            className="px-3 py-2 text-left text-gray-400 font-medium text-xs"
-                          >
-                            {col}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {preview.map((row, idx) => (
-                        <tr key={idx} className="border-b border-gray-800 hover:bg-gray-800/30">
-                          <td className="px-3 py-2 text-gray-300 text-xs">
-                            {row["Item Name"]}
-                          </td>
-                          <td className="px-3 py-2 text-gray-400 text-xs">
-                            {row["Group"]}
-                          </td>
-                          <td className="px-3 py-2 text-gray-400 text-xs">
-                            {row["Category"]}
-                          </td>
-                          <td className="px-3 py-2 text-gray-400 text-xs">
-                            {row["Variation Name"]} - {row["Variation Value"]}
-                          </td>
-                          <td className="px-3 py-2 text-gray-300 text-xs">
-                            ₹{row["Base Price"]}
-                          </td>
-                          <td className="px-3 py-2 text-gray-400 text-xs">
-                            {row["SAP Code"]}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                {preview.length > 0 && preview[0].newSaleType ? (
+                  // Sale Type Manager preview
+                  <>
+                    <p className="text-gray-300 font-medium mb-3">Sale Type Changes Preview (First 5 changes)</p>
+                    <div className="max-h-64 overflow-y-auto">
+                      <table className="w-full text-sm">
+                        <thead className="sticky top-0">
+                          <tr className="bg-gray-800/50 border-b border-gray-700">
+                            {[
+                              "Item Name",
+                              "Variation",
+                              "SAP Code",
+                              "Current Type",
+                              "New Type",
+                            ].map((col) => (
+                              <th
+                                key={col}
+                                className="px-3 py-2 text-left text-gray-400 font-medium text-xs"
+                              >
+                                {col}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {preview.map((row: any, idx) => (
+                            <tr key={idx} className="border-b border-gray-800 hover:bg-gray-800/30">
+                              <td className="px-3 py-2 text-gray-300 text-xs">
+                                {row.itemName}
+                              </td>
+                              <td className="px-3 py-2 text-gray-400 text-xs">
+                                {row.sapCode ? `SAP: ${row.sapCode}` : "Item Level"}
+                              </td>
+                              <td className="px-3 py-2 text-gray-400 text-xs">
+                                {row.sapCode || "-"}
+                              </td>
+                              <td className="px-3 py-2 text-gray-400 text-xs">
+                                {row.currentSaleType}
+                              </td>
+                              <td className="px-3 py-2 text-green-300 text-xs font-medium">
+                                {row.newSaleType}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                ) : (
+                  // Regular item import preview
+                  <>
+                    <p className="text-gray-300 font-medium mb-3">Preview (First 5 rows) - Item ID & Short Code will be auto-generated</p>
+                    <div className="max-h-64 overflow-y-auto">
+                      <table className="w-full text-sm">
+                        <thead className="sticky top-0">
+                          <tr className="bg-gray-800/50 border-b border-gray-700">
+                            {[
+                              "Item Name",
+                              "Group",
+                              "Category",
+                              "Variation",
+                              "Price",
+                              "SAP Code",
+                            ].map((col) => (
+                              <th
+                                key={col}
+                                className="px-3 py-2 text-left text-gray-400 font-medium text-xs"
+                              >
+                                {col}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {preview.map((row, idx) => (
+                            <tr key={idx} className="border-b border-gray-800 hover:bg-gray-800/30">
+                              <td className="px-3 py-2 text-gray-300 text-xs">
+                                {row["Item Name"]}
+                              </td>
+                              <td className="px-3 py-2 text-gray-400 text-xs">
+                                {row["Group"]}
+                              </td>
+                              <td className="px-3 py-2 text-gray-400 text-xs">
+                                {row["Category"]}
+                              </td>
+                              <td className="px-3 py-2 text-gray-400 text-xs">
+                                {row["Variation Name"]} - {row["Variation Value"]}
+                              </td>
+                              <td className="px-3 py-2 text-gray-300 text-xs">
+                                ₹{row["Base Price"]}
+                              </td>
+                              <td className="px-3 py-2 text-gray-400 text-xs">
+                                {row["SAP Code"]}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                )}
               </div>
 
               <div className="flex gap-3">
@@ -780,7 +922,8 @@ export default function ExcelImportDialog({
                   disabled={loading || !file}
                   className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white rounded-lg font-medium transition-colors"
                 >
-                  {loading ? "Importing..." : "Import Items"}
+                  {loading ? "Processing..." : 
+                   preview.length > 0 && preview[0].newSaleType ? "Update Sale Types" : "Import Items"}
                 </button>
               </div>
             </div>

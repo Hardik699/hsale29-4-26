@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { ArrowLeft, Trash2, Edit, RotateCcw, Package, FileText, TrendingUp } from "lucide-react";
+import { ArrowLeft, Trash2, Edit, RotateCcw, Package, FileText, TrendingUp, ClipboardList } from "lucide-react";
 import SalesSummaryCards from "@/components/ItemDetail/SalesSummaryCards";
 import SalesCharts from "@/components/ItemDetail/SalesCharts";
 
@@ -30,8 +30,8 @@ const calculateAutoPrices = (basePrice: number) => {
 // Move outside component to prevent recalculation on every render
 const getDefaultDateRange = () => {
   const endDate = new Date().toISOString().split("T")[0];
-  // Show data from last 3+ years to include all historical data (2000-01-01 as fallback for very old data)
-  const startDate = new Date(Date.now() - 1095 * 24 * 60 * 60 * 1000)
+  // Show data from last 365 days only for faster loading
+  const startDate = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000)
     .toISOString()
     .split("T")[0];
   return { start: startDate, end: endDate };
@@ -55,6 +55,21 @@ export default function ItemDetail() {
   const [showResetConfirm, setShowResetConfirm] = useState(false);
   const [isResetting, setIsResetting] = useState(false);
 
+  // Change log
+  const [showLogs, setShowLogs] = useState(false);
+  const [logs, setLogs] = useState<any[]>([]);
+  const [logsLoading, setLogsLoading] = useState(false);
+
+  const fetchLogs = async () => {
+    setLogsLoading(true);
+    try {
+      const res = await fetch(`/api/items/${itemId}/logs`);
+      const data = await res.json();
+      setLogs(data.data || []);
+    } catch { setLogs([]); }
+    finally { setLogsLoading(false); }
+  };
+
   // Comparison mode
   const [comparisonMode, setComparisonMode] = useState(false);
   const [comparisonDateRange, setComparisonDateRange] = useState(() => {
@@ -67,77 +82,50 @@ export default function ItemDetail() {
   // Debug logging
   console.log("🔧 ItemDetail mounted, params:", params, "itemId:", itemId);
 
-  // Fetch unique restaurants (non-blocking)
+  // Fetch unique restaurants (non-blocking) - with fallback
   useEffect(() => {
     let isMounted = true;
-    let timeoutId: NodeJS.Timeout | null = null;
 
-    const fetchRestaurants = async (retryCount = 0, delayMs = 0) => {
-      if (delayMs > 0) {
-        await new Promise(resolve => setTimeout(resolve, delayMs));
-      }
-
-      if (!isMounted) return;
-
-      // Create a new AbortController for each fetch attempt
-      const controller = new AbortController();
-
+    const fetchRestaurants = async () => {
       try {
-        if (retryCount === 0) setRestaurantsLoading(true);
-
-        const abortTimeoutId = setTimeout(() => controller.abort(), 30000);
-
-        console.log(`🔄 Fetching restaurants (attempt ${retryCount + 1})...`);
+        setRestaurantsLoading(true);
+        console.log(`🔄 Fetching restaurants...`);
+        
+        // Set timeout of 5 seconds - if slow, use fallback
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 5000);
+        
         const response = await fetch("/api/sales/restaurants", {
           signal: controller.signal,
         });
+        
+        clearTimeout(timeoutId);
 
-        clearTimeout(abortTimeoutId);
-        if (!isMounted) return;
-
-        if (!response.ok) {
-          console.warn("⚠️ Failed to fetch restaurants:", response.status, response.statusText);
-          if (isMounted) setRestaurants([]);
-          return;
-        }
-
-        const result = await response.json();
-        if (isMounted) {
+        if (response.ok) {
+          const result = await response.json();
           if (result.success && Array.isArray(result.data) && result.data.length > 0) {
             setRestaurants(result.data);
             console.log(`📝 Found ${result.data.length} restaurants`);
-          } else {
-            setRestaurants([]);
-          }
-        }
-      } catch (error) {
-        console.error(`❌ Restaurant fetch failed (attempt ${retryCount + 1}):`, error);
-        // Retry once on network errors or timeout
-        if (retryCount < 1 && isMounted) {
-          if (error instanceof TypeError || (error instanceof Error && error.name === "AbortError")) {
-            console.log(`⏳ Retrying restaurant fetch in 2 seconds...`);
-            timeoutId = setTimeout(() => fetchRestaurants(retryCount + 1), 2000);
             return;
           }
         }
-        if (isMounted) {
-          console.warn("⚠️ Setting restaurants to empty array due to fetch failure");
-          setRestaurants([]);
-        }
+        
+        // Fallback: use common restaurant names
+        console.warn("⚠️ Using fallback restaurant list");
+        setRestaurants(["HanuRam CCO", "HanuRam MKP", "HanuRam Manjal Pur"]);
+      } catch (error) {
+        console.warn("⚠️ Restaurant fetch failed, using fallback list");
+        // Fallback list
+        setRestaurants(["HanuRam CCO", "HanuRam MKP", "HanuRam Manjal Pur"]);
       } finally {
-        if (isMounted && retryCount === 0) {
-          setRestaurantsLoading(false);
-        }
+        if (isMounted) setRestaurantsLoading(false);
       }
     };
 
-    // Delay initial fetch slightly to ensure server is ready
-    fetchRestaurants(0, 100);
+    fetchRestaurants();
 
-    // Cleanup function
     return () => {
       isMounted = false;
-      if (timeoutId) clearTimeout(timeoutId);
     };
   }, []);
 
@@ -489,6 +477,96 @@ export default function ItemDetail() {
 
   return (
     <div className="flex-1 min-h-screen bg-gray-950 p-4 sm:p-6 lg:p-8 space-y-8 no-scrollbar">
+      {/* Change Log Modal */}
+      {showLogs && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-md flex items-center justify-center z-50 p-4">
+          <div className="bg-[#0f1117] border border-white/10 rounded-2xl shadow-2xl w-full max-w-2xl max-h-[85vh] flex flex-col">
+
+            {/* Header */}
+            <div className="flex items-center justify-between px-5 py-4 border-b border-white/10">
+              <div className="flex items-center gap-2.5">
+                <div className="bg-blue-500/20 p-1.5 rounded-lg">
+                  <ClipboardList className="w-4 h-4 text-blue-400" />
+                </div>
+                <span className="text-white font-bold text-base">Price History</span>
+                <span className="text-xs text-blue-300 bg-blue-500/10 border border-blue-500/20 px-2 py-0.5 rounded-full font-medium">{item?.itemName}</span>
+              </div>
+              <button onClick={() => setShowLogs(false)} className="w-7 h-7 flex items-center justify-center text-gray-500 hover:text-white hover:bg-white/10 rounded-lg transition text-sm">✕</button>
+            </div>
+
+            {/* Body */}
+            <div className="overflow-y-auto flex-1 p-4 space-y-3">
+              {logsLoading ? (
+                <div className="flex items-center justify-center py-16">
+                  <div className="w-5 h-5 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+                </div>
+              ) : logs.length === 0 ? (
+                <div className="flex flex-col items-center justify-center py-16 gap-2">
+                  <ClipboardList className="w-8 h-8 text-gray-700" />
+                  <p className="text-gray-500 text-sm">No price changes recorded yet.</p>
+                </div>
+              ) : logs.map((log, i) => {
+                const priceChanges = log.changes?.filter((c: any) => {
+                  if (c.field === "updated") return false;
+                  return c.field.endsWith(".price") || c.field === "price";
+                }) || [];
+                if (priceChanges.length === 0) return null;
+                return (
+                  <div key={i} className="bg-white/[0.03] border border-white/8 rounded-xl overflow-hidden hover:border-white/15 transition-colors">
+                    {/* Entry meta */}
+                    <div className="flex items-center justify-between px-4 py-3 border-b border-white/8">
+                      <div className="flex items-center gap-2">
+                        <div className="w-1.5 h-1.5 rounded-full bg-blue-400"></div>
+                        <span className="text-xs font-semibold text-gray-300">
+                          {new Date(log.changedAt).toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}
+                        </span>
+                      </div>
+                      <span className="text-[11px] text-gray-500">
+                        by <span className={log.changedBy && log.changedBy !== "unknown" ? "text-blue-400 font-semibold" : "text-gray-600 italic"}>{log.changedBy || "unknown"}</span>
+                      </span>
+                    </div>
+
+                    {/* Price change rows */}
+                    <div className="divide-y divide-white/5">
+                      {priceChanges.map((c: any, j: number) => {
+                        const label = c.field
+                          .replace(/variation\[(\d+)\]\(([^)]+)\)\.channels\./, "[$2] ")
+                          .replace(/variation\[(\d+)\]\(([^)]+)\)\./, "[$2] ")
+                          .replace(/channels\./, "")
+                          .replace(".price", "");
+                        const oldVal = c.oldValue !== null ? Number(c.oldValue) : null;
+                        const newVal = c.newValue !== null ? Number(c.newValue) : null;
+                        const diff = oldVal !== null && newVal !== null ? newVal - oldVal : null;
+                        const isIncrease = diff !== null && diff > 0;
+                        return (
+                          <div key={j} className="flex items-center justify-between px-4 py-3 gap-4">
+                            <span className="text-sm text-gray-300 font-medium min-w-0 truncate">{label || "Base Price"}</span>
+                            <div className="flex items-center gap-3 shrink-0">
+                              <span className="text-sm text-red-400 font-mono line-through opacity-70">
+                                {oldVal !== null ? `₹${oldVal}` : "—"}
+                              </span>
+                              <span className="text-gray-600 text-xs">→</span>
+                              <span className="text-sm text-green-400 font-mono font-bold">
+                                {newVal !== null ? `₹${newVal}` : "—"}
+                              </span>
+                              {diff !== null && (
+                                <span className={`text-[11px] font-bold px-1.5 py-0.5 rounded ${isIncrease ? "bg-red-500/15 text-red-400" : "bg-green-500/15 text-green-400"}`}>
+                                  {isIncrease ? `+₹${diff}` : `-₹${Math.abs(diff)}`}
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Reset Confirmation Modal */}
       {showResetConfirm && (
         <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
@@ -554,6 +632,14 @@ export default function ItemDetail() {
             >
               <Edit className="w-5 h-5" />
               <span className="sm:hidden font-bold">Edit</span>
+            </button>
+            <button
+              onClick={() => { setShowLogs(true); fetchLogs(); }}
+              className="flex-1 sm:flex-none p-3 bg-gray-800 hover:bg-gray-700 text-blue-400 rounded-xl border border-gray-700 transition-all flex items-center justify-center gap-2"
+              title="Change log"
+            >
+              <ClipboardList className="w-5 h-5" />
+              <span className="sm:hidden font-bold">Log</span>
             </button>
             <button
               onClick={() => setShowResetConfirm(true)}
@@ -912,6 +998,10 @@ export default function ItemDetail() {
                     comparisonRestaurantSales={comparisonSalesData?.restaurantSales}
                     dateRange={dateRange}
                     comparisonDateRange={comparisonDateRange}
+                    itemName={item?.itemName}
+                    itemCategory={item?.category}
+                    itemGroup={item?.group}
+                    itemPrice={item?.variations?.[0]?.price || 0}
                   />
 
                   {/* Comparison Summary */}

@@ -84,6 +84,7 @@ export default function ItemEdit() {
   const [shortCode, setShortCode] = useState("");
   const [description, setDescription] = useState("");
   const [hsnCode, setHsnCode] = useState("");
+  const [supplyNoteSku, setSupplyNoteSku] = useState("");
   const [group, setGroup] = useState("");
   const [category, setCategory] = useState("");
   const [profitMargin, setProfitMargin] = useState("");
@@ -186,6 +187,7 @@ export default function ItemEdit() {
         setShortCode(foundItem.shortCode);
         setDescription(foundItem.description || "");
         setHsnCode(foundItem.hsnCode || "");
+        setSupplyNoteSku(foundItem.supplyNoteSku || "");
         setGroup(foundItem.group);
         setCategory(foundItem.category);
         setProfitMargin(foundItem.profitMargin?.toString() || "");
@@ -735,6 +737,7 @@ export default function ItemEdit() {
       shortCode,
       description,
       hsnCode,
+      supplyNoteSku,
       group,
       category,
       profitMargin: parseFloat(profitMargin) || 0,
@@ -751,7 +754,10 @@ export default function ItemEdit() {
 
       const response = await fetch(`/api/items/${itemId}`, {
         method: "PUT",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "x-user": localStorage.getItem("username") || "unknown",
+        },
         body: JSON.stringify(updatedItem),
       });
 
@@ -990,6 +996,19 @@ export default function ItemEdit() {
                       </button>
                     </div>
                   )}
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-3">
+                    Supply Note SKU
+                  </label>
+                  <input
+                    type="text"
+                    value={supplyNoteSku}
+                    onChange={(e) => setSupplyNoteSku(e.target.value)}
+                    placeholder="Enter supply note SKU"
+                    className="w-full px-3.5 py-2 border border-slate-600 rounded-lg bg-slate-700 text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-green-500 focus:border-green-500 transition-all duration-300 hover:border-slate-500"
+                  />
                 </div>
 
                 <div>

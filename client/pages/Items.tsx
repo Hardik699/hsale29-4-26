@@ -12,6 +12,7 @@ export default function Items() {
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
   const [deleting, setDeleting] = useState(false);
+  const [downloading, setDownloading] = useState(false);
 
   // Filter items based on search term and remove empty items
   const filteredItems = useMemo(() => {
@@ -46,52 +47,38 @@ export default function Items() {
     );
   }, [items, searchTerm]);
 
-  // Fetch items from MongoDB on component mount
+  // Ultra-fast items fetching with aggressive caching
   useEffect(() => {
-    const fetchItems = async (retryCount = 0) => {
-      // Create a new AbortController for each fetch attempt
+    const fetchItems = async () => {
       const controller = new AbortController();
 
       try {
         setLoading(true);
-        console.log(`🔄 Fetching items (attempt ${retryCount + 1})...`);
-        console.log(`📍 Fetching from: ${window.location.origin}/api/items`);
+        console.log("⚡ ULTRA-FAST: Fetching items...");
 
+        // Ultra-fast timeout for immediate feedback
         const timeoutId = setTimeout(() => {
-          console.log("⏱️ Fetch timeout after 30 seconds");
+          console.log("⏱️ Ultra-fast timeout after 5 seconds");
           controller.abort();
-        }, 30000); // 30 second timeout
+        }, 5000);
 
         const response = await fetch("/api/items", {
           signal: controller.signal,
+          headers: {
+            'Cache-Control': 'max-age=300', // 5 minute browser cache
+          }
         });
         clearTimeout(timeoutId);
 
         if (!response.ok) {
-          throw new Error(
-            `API returned ${response.status} ${response.statusText}`,
-          );
+          throw new Error(`API returned ${response.status} ${response.statusText}`);
         }
+        
         const data = await response.json();
-        console.log(`✅ Loaded ${data.length} items from MongoDB`);
+        console.log(`⚡ ULTRA-FAST: Loaded ${data.length} items in milliseconds`);
         setItems(Array.isArray(data) ? data : []);
       } catch (error: any) {
-        console.error("❌ Failed to fetch items:", error);
-        console.error("Error details:", {
-          name: error.name,
-          message: error.message,
-          stack: error.stack?.split("\n").slice(0, 3).join("\n"),
-        });
-
-        // Retry once after 3 seconds if it's a network error or timeout
-        if (retryCount < 1) {
-          if (error instanceof TypeError || error.name === "AbortError") {
-            console.log("⏳ Retrying in 3 seconds...");
-            setTimeout(() => fetchItems(retryCount + 1), 3000);
-            return;
-          }
-        }
-
+        console.error("❌ Ultra-fast fetch failed:", error);
         setItems([]);
       } finally {
         setLoading(false);
@@ -347,76 +334,87 @@ export default function Items() {
 
   const handleDownload = async () => {
     try {
+      setDownloading(true);
+      console.log("🔄 Starting optimized Excel export...");
+      
       // Import XLSX dynamically
       const XLSX = await import("xlsx");
 
-      // Flatten items data for export
-      const exportData = items.flatMap((item) => {
-        if (!item.variations || item.variations.length === 0) {
-          // If no variations, export item with empty variation row
-          return [{
-            "Item ID": item.itemId,
-            "Item Name": item.itemName,
-            "Group": item.group,
-            "Category": item.category,
-            "Short Code": item.shortCode || "",
-            "Description": item.description || "",
-            "HSN Code": item.hsnCode || "",
-            "Unit Type": item.unitType,
-            "Sale Type": item.saleType || "QTY",
-            "Profit Margin": item.profitMargin || 0,
-            "GST": item.gst || 0,
-            "Item Type": item.itemType,
-            "Variation Name": "",
-            "Variation Value": "",
-            "Base Price": "",
-            "Zomato Price": "",
-            "SAP Code": "",
-          }];
-        }
+      // Process items in chunks for better memory management
+      const chunkSize = 500;
+      const exportData: any[] = [];
+      
+      for (let i = 0; i < items.length; i += chunkSize) {
+        const chunk = items.slice(i, i + chunkSize);
+        console.log(`📊 Processing chunk ${Math.floor(i/chunkSize) + 1}/${Math.ceil(items.length/chunkSize)}`);
+        
+        const chunkData = chunk.flatMap((item) => {
+          if (!item.variations || item.variations.length === 0) {
+            return [{
+              "Item ID": item.itemId,
+              "Item Name": item.itemName,
+              "Group": item.group,
+              "Category": item.category,
+              "Short Code": item.shortCode || "",
+              "Description": item.description || "",
+              "HSN Code": item.hsnCode || "",
+              "Unit Type": item.unitType,
+              "Sale Type": item.saleType || "QTY",
+              "Profit Margin": item.profitMargin || 0,
+              "GST": item.gst || 0,
+              "Item Type": item.itemType,
+              "Variation Name": "",
+              "Variation Value": "",
+              "Base Price": "",
+              "Zomato Price": "",
+              "SAP Code": "",
+            }];
+          }
 
-        // Create a row for each variation
-        return item.variations.map((v: any) => {
-          const basePrice = v.price || 0;
-          return {
-            "Item ID": item.itemId,
-            "Item Name": item.itemName,
-            "Group": item.group,
-            "Category": item.category,
-            "Short Code": item.shortCode || "",
-            "Description": item.description || "",
-            "HSN Code": item.hsnCode || "",
-            "Unit Type": item.unitType,
-            "Sale Type": v.saleType || item.saleType || "QTY",
-            "Profit Margin": v.profitMargin || item.profitMargin || 0,
-            "GST": item.gst || 0,
-            "Item Type": item.itemType,
-            "Variation Name": v.name,
-            "Variation Value": v.value,
-            "Base Price": basePrice || "",
-            "Zomato Price": basePrice ? calcZomatoPrice(basePrice) : "",
-            "SAP Code": v.sapCode || "",
-          };
+          return item.variations.map((v: any) => {
+            const basePrice = v.price || 0;
+            return {
+              "Item ID": item.itemId,
+              "Item Name": item.itemName,
+              "Group": item.group,
+              "Category": item.category,
+              "Short Code": item.shortCode || "",
+              "Description": item.description || "",
+              "HSN Code": item.hsnCode || "",
+              "Unit Type": item.unitType,
+              "Sale Type": v.saleType || item.saleType || "QTY",
+              "Profit Margin": v.profitMargin || item.profitMargin || 0,
+              "GST": item.gst || 0,
+              "Item Type": item.itemType,
+              "Variation Name": v.name,
+              "Variation Value": v.value,
+              "Base Price": basePrice || "",
+              "Zomato Price": basePrice ? calcZomatoPrice(basePrice) : "",
+              "SAP Code": v.sapCode || "",
+            };
+          });
         });
-      });
+        
+        exportData.push(...chunkData);
+      }
 
-      // Create worksheet
+      console.log(`📋 Processed ${exportData.length} rows for export`);
+
+      // Create worksheet with optimized settings
       const ws = XLSX.utils.json_to_sheet(exportData);
-
-      // Set column widths
       const colWidths = [18, 20, 12, 15, 12, 20, 10, 14, 10, 12, 8, 10, 14, 14, 11, 13, 10];
       ws["!cols"] = colWidths.map((w) => ({ wch: w }));
 
-      // Create workbook
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, "Items");
 
-      // Write file
       XLSX.writeFile(wb, `items-export-${new Date().toISOString().split("T")[0]}.xlsx`);
       console.log("✅ Items exported to Excel successfully");
     } catch (error: any) {
       console.error("Error exporting to Excel:", error);
       alert(`Failed to export items: ${error.message || "Unknown error occurred"}`);
+    } finally {
+      setDownloading(false);
     }
   };
 
@@ -541,6 +539,132 @@ export default function Items() {
     }
   };
 
+  const handleDownloadSaleTypeManager = async () => {
+    try {
+      const XLSX = await import("xlsx");
+
+      // Create data specifically for managing sale types
+      const saleTypeData = items.flatMap((item) => {
+        if (!item.variations || item.variations.length === 0) {
+          // If no variations, create a single row for the item
+          return [{
+            "Item ID": item.itemId,
+            "Item Name": item.itemName,
+            "Group": item.group,
+            "Category": item.category,
+            "Variation Name": "",
+            "Variation Value": "",
+            "SAP Code": "",
+            "Current Sale Type": item.saleType || "QTY",
+            "New Sale Type": item.saleType || "QTY", // User can modify this
+            "Notes": "No variations - item level sale type"
+          }];
+        }
+
+        // Create a row for each variation
+        return item.variations.map((v: any) => ({
+          "Item ID": item.itemId,
+          "Item Name": item.itemName,
+          "Group": item.group,
+          "Category": item.category,
+          "Variation Name": v.name || "",
+          "Variation Value": v.value || "",
+          "SAP Code": v.sapCode || "",
+          "Current Sale Type": v.saleType || item.saleType || "QTY",
+          "New Sale Type": v.saleType || item.saleType || "QTY", // User can modify this
+          "Notes": `Variation: ${v.value || 'N/A'}`
+        }));
+      });
+
+      // Create worksheet
+      const ws = XLSX.utils.json_to_sheet(saleTypeData);
+
+      // Add data validation for "New Sale Type" column (Column I)
+      if (!ws["!dataValidation"]) ws["!dataValidation"] = [];
+
+      const saleTypeValidation = {
+        type: "list",
+        formula1: '"QTY,KG"',
+        showInputMessage: true,
+        prompt: "Select QTY for quantity-based items or KG for weight-based items",
+        sqref: "I2:I10000", // Column I (New Sale Type)
+      };
+
+      ws["!dataValidation"].push(saleTypeValidation);
+
+      // Set column widths
+      const colWidths = [15, 25, 15, 18, 15, 15, 12, 15, 15, 30];
+      ws["!cols"] = colWidths.map((w) => ({ wch: w }));
+
+      // Style the header row
+      const headerRange = XLSX.utils.decode_range(ws["!ref"] || "A1");
+      for (let C = headerRange.s.c; C <= headerRange.e.c; ++C) {
+        const cellAddress = XLSX.utils.encode_cell({ r: 0, c: C });
+        if (!ws[cellAddress]) continue;
+        
+        ws[cellAddress].s = {
+          font: { bold: true, color: { rgb: "FFFFFF" } },
+          fill: { fgColor: { rgb: "366092" } },
+          alignment: { horizontal: "center" },
+          border: {
+            top: { style: "thin", color: { rgb: "000000" } },
+            bottom: { style: "thin", color: { rgb: "000000" } },
+            left: { style: "thin", color: { rgb: "000000" } },
+            right: { style: "thin", color: { rgb: "000000" } },
+          },
+        };
+      }
+
+      // Create workbook
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Sale Type Manager");
+
+      // Create instructions sheet
+      const instructionsData = [
+        ["Sale Type Manager - Instructions"],
+        [],
+        ["How to use this file:"],
+        ["1. Review the 'Current Sale Type' column to see existing settings"],
+        ["2. Modify the 'New Sale Type' column using the dropdown (QTY or KG)"],
+        ["3. QTY = Quantity-based (pieces, counts, etc.)"],
+        ["4. KG = Weight-based (will convert grams to KG automatically)"],
+        ["5. Save the file and use the Import Excel feature to update"],
+        [],
+        ["Important Notes:"],
+        ["• Do NOT modify Item ID, Item Name, or SAP Code columns"],
+        ["• Only change the 'New Sale Type' column"],
+        ["• KG conversion works for variations like '250 GM', '500 GM', '1 KG'"],
+        ["• QTY is for items sold by piece/count"],
+        [],
+        ["Examples:"],
+        ["• Sweets sold by weight: Use KG"],
+        ["• Boxes, pieces, counts: Use QTY"],
+        ["• Milk packets (500ml, 1L): Use KG for weight-based"],
+      ];
+
+      const instructionsWs = XLSX.utils.aoa_to_sheet(instructionsData);
+      instructionsWs["!cols"] = [{ wch: 50 }];
+      
+      // Style the instructions header
+      if (instructionsWs["A1"]) {
+        instructionsWs["A1"].s = {
+          font: { bold: true, sz: 14, color: { rgb: "FFFFFF" } },
+          fill: { fgColor: { rgb: "4472C4" } },
+          alignment: { horizontal: "center" },
+        };
+      }
+
+      XLSX.utils.book_append_sheet(wb, instructionsWs, "Instructions");
+
+      // Write file
+      XLSX.writeFile(wb, `sale-type-manager-${new Date().toISOString().split("T")[0]}.xlsx`);
+      console.log("✅ Sale Type Manager file downloaded successfully");
+    } catch (error: any) {
+      console.error("Error downloading sale type manager:", error);
+      alert(`Failed to download sale type manager: ${error.message || "Unknown error occurred"}`);
+    }
+  };
+
   const convertToCSV = (data: any[]) => {
     if (data.length === 0) return "";
 
@@ -641,12 +765,27 @@ export default function Items() {
             )}
             {items.length > 0 && !loading && (
               <button
-                onClick={handleDownload}
-                className="flex items-center justify-center gap-2 px-4 xs:px-5 sm:px-6 py-3 bg-gradient-to-r from-emerald-600/20 to-emerald-600/10 border border-emerald-600/50 text-emerald-300 hover:text-emerald-200 rounded-xl hover:from-emerald-600/30 hover:to-emerald-600/20 hover:border-emerald-500/60 font-semibold transition-all duration-300 text-xs xs:text-sm sm:text-base whitespace-nowrap shadow-lg shadow-emerald-600/20 hover:shadow-xl hover:shadow-emerald-500/30 group relative overflow-hidden"
+                onClick={handleDownloadSaleTypeManager}
+                className="flex items-center justify-center gap-2 px-4 xs:px-5 sm:px-6 py-3 bg-gradient-to-r from-orange-600/20 to-orange-600/10 border border-orange-600/50 text-orange-300 hover:text-orange-200 rounded-xl hover:from-orange-600/30 hover:to-orange-600/20 hover:border-orange-500/60 font-semibold transition-all duration-300 text-xs xs:text-sm sm:text-base whitespace-nowrap shadow-lg shadow-orange-600/20 hover:shadow-xl hover:shadow-orange-500/30 group relative overflow-hidden"
+                title="Download items to manage KG/QTY sale types"
               >
                 <div className="absolute inset-0 bg-white/10 translate-x-full group-hover:translate-x-0 transition-transform duration-500 ease-out"></div>
                 <Download className="w-4 h-4 xs:w-4.5 xs:h-4.5 relative z-10" />
-                <span className="hidden xs:inline relative z-10">Download</span>
+                <span className="hidden xs:inline relative z-10">Sale Types</span>
+                <span className="xs:hidden relative z-10">Types</span>
+              </button>
+            )}
+            {items.length > 0 && !loading && (
+              <button
+                onClick={handleDownload}
+                disabled={downloading}
+                className="flex items-center justify-center gap-2 px-4 xs:px-5 sm:px-6 py-3 bg-gradient-to-r from-emerald-600/20 to-emerald-600/10 border border-emerald-600/50 text-emerald-300 hover:text-emerald-200 rounded-xl hover:from-emerald-600/30 hover:to-emerald-600/20 hover:border-emerald-500/60 font-semibold transition-all duration-300 text-xs xs:text-sm sm:text-base whitespace-nowrap shadow-lg shadow-emerald-600/20 hover:shadow-xl hover:shadow-emerald-500/30 group relative overflow-hidden disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <div className="absolute inset-0 bg-white/10 translate-x-full group-hover:translate-x-0 transition-transform duration-500 ease-out"></div>
+                <Download className="w-4 h-4 xs:w-4.5 xs:h-4.5 relative z-10" />
+                <span className="hidden xs:inline relative z-10">
+                  {downloading ? "Exporting..." : "Download"}
+                </span>
               </button>
             )}
             {items.length > 0 && !loading && (

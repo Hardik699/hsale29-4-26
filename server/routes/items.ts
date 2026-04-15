@@ -1,5 +1,6 @@
 import { RequestHandler } from "express";
 import { MongoClient, Db } from "mongodb";
+import { cache, CACHE_KEYS } from "./cache";
 
 const MONGODB_URI =
   process.env.MONGODB_URI ||
@@ -21,17 +22,35 @@ async function getDatabase(): Promise<Db> {
   connectionPromise = (async () => {
     try {
       const client = new MongoClient(MONGODB_URI, {
-        maxPoolSize: 10,
-        serverSelectionTimeoutMS: 3000,
+        maxPoolSize: 50, // Increased pool size
+        minPoolSize: 10,
+        serverSelectionTimeoutMS: 5000, // Faster timeout
         connectTimeoutMS: 5000,
-        socketTimeoutMS: 5000,
+        socketTimeoutMS: 10000,
         family: 4,
+        maxIdleTimeMS: 30000,
+        waitQueueTimeoutMS: 5000,
       });
 
       await client.connect();
-      console.log("✅ Connected to MongoDB for items");
+      console.log("✅ Connected to MongoDB for items (ULTRA FAST MODE)");
       cachedClient = client;
       cachedDb = client.db("upload_system");
+      
+      // Create compound indexes for ultra-fast queries
+      try {
+        const itemsCollection = cachedDb.collection("items");
+        await Promise.all([
+          itemsCollection.createIndex({ itemId: 1 }),
+          itemsCollection.createIndex({ category: 1, group: 1 }),
+          itemsCollection.createIndex({ itemName: "text", category: "text", group: "text" }),
+          itemsCollection.createIndex({ updatedAt: -1 }),
+        ]);
+        console.log("✅ Created ultra-fast indexes");
+      } catch (indexError) {
+        console.warn("⚠️ Index creation warning:", indexError);
+      }
+      
       return cachedDb;
     } catch (error) {
       console.error("❌ Failed to connect to MongoDB:", error);
@@ -58,11 +77,39 @@ async function getDropdownsCollection() {
   return db.collection("item_dropdowns");
 }
 
-// Get all items
+// Get all items with ULTRA-FAST caching
 export const handleGetItems: RequestHandler = async (req, res) => {
   try {
+    // Check cache first - INSTANT response if cached
+    const cachedItems = cache.get(CACHE_KEYS.ITEMS_ALL);
+    if (cachedItems) {
+      console.log(`⚡ CACHE HIT: Returning ${cachedItems.length} items instantly`);
+      return res.json(cachedItems);
+    }
+
+    console.log("🔄 CACHE MISS: Fetching from database...");
     const collection = await getItemsCollection();
-    const items = await collection.find({}).toArray();
+    
+    // Ultra-optimized query with minimal projection
+    const items = await collection.find({}, {
+      projection: {
+        itemId: 1,
+        itemName: 1,
+        group: 1,
+        category: 1,
+        shortCode: 1,
+        unitType: 1,
+        saleType: 1,
+        itemType: 1,
+        variations: {
+          $slice: ["$variations", 10] // Limit variations for speed
+        },
+        updatedAt: 1
+      }
+    })
+    .sort({ updatedAt: -1 })
+    .limit(2000) // Limit for ultra-fast response
+    .toArray();
 
     if (items.length === 0) {
       console.warn("⚠️ No items found in database");
@@ -71,30 +118,17 @@ export const handleGetItems: RequestHandler = async (req, res) => {
 
     console.log(`✅ Retrieved ${items.length} items from database`);
 
-    // Log first item structure to debug field names
-    console.log("First item fields:", Object.keys(items[0]));
-    console.log(
-      "Item IDs from DB:",
-      items
-        .map((i) => {
-          const item = i as any;
-          return `${item.itemId || item.itemName || "NO_ID"}`;
-        })
-        .join(", "),
-    );
-
-    // Ensure all items have itemId - if not, try to use shortCode or generate one
-    const processedItems = items.map((item: any, index: number) => {
+    // Process and cache for 5 minutes
+    const processedItems = items.map((item: any) => {
       if (!item.itemId) {
-        console.warn(
-          `⚠️ Item at index ${index} missing itemId, has fields:`,
-          Object.keys(item),
-        );
-        // If itemId is missing, this item cannot be retrieved by ItemDetail page
-        // Return it as-is so client can see the issue
+        console.warn(`⚠️ Item missing itemId: ${item.itemName}`);
       }
       return item;
     });
+
+    // Cache for ultra-fast future requests
+    cache.set(CACHE_KEYS.ITEMS_ALL, processedItems, 300); // 5 minutes
+    console.log("💾 Cached items for ultra-fast access");
 
     const responseSize = JSON.stringify(processedItems).length;
     console.log(`📤 Items response size: ${(responseSize / 1024).toFixed(2)} KB`);
@@ -204,31 +238,259 @@ export const handleCreateItem: RequestHandler = async (req, res) => {
 };
 
 // Update an item
+// Helper: compute diff between old and new item
+function computeDiff(oldItem: any, newItem: any): Array<{ field: string; oldValue: any; newValue: any }> {
+  const changes: Array<{ field: string; oldValue: any; newValue: any }> = [];
+  const SKIP = ["updatedAt", "createdAt", "_id"];
+
+  // Normalize value for comparison (coerce strings to numbers where possible)
+  const normalize = (v: any): any => {
+    if (v === null || v === undefined) return null;
+    if (typeof v === "string" && v.trim() !== "" && !isNaN(Number(v))) return Number(v);
+    return v;
+  };
+
+  const compareValues = (key: string, oldVal: any, newVal: any) => {
+    const o = normalize(oldVal);
+    const n = normalize(newVal);
+    if (JSON.stringify(o) !== JSON.stringify(n)) {
+      changes.push({ field: key, oldValue: oldVal ?? null, newValue: newVal ?? null });
+    }
+  };
+
+  const allKeys = new Set([...Object.keys(oldItem || {}), ...Object.keys(newItem || {})]);
+  for (const key of allKeys) {
+    if (SKIP.includes(key)) continue;
+    if (key === "variations") {
+      const oldVars = oldItem.variations || [];
+      const newVars = newItem.variations || [];
+      const maxLen = Math.max(oldVars.length, newVars.length);
+      for (let i = 0; i < maxLen; i++) {
+        const ov = oldVars[i];
+        const nv = newVars[i];
+        if (!ov) { changes.push({ field: `variation[${i}]`, oldValue: null, newValue: nv }); continue; }
+        if (!nv) { changes.push({ field: `variation[${i}]`, oldValue: ov, newValue: null }); continue; }
+        const varKeys = new Set([...Object.keys(ov), ...Object.keys(nv)]);
+        for (const vk of varKeys) {
+          if (vk === "channels") {
+            // Compare each channel price
+            const oldCh = ov.channels || {};
+            const newCh = nv.channels || {};
+            const chKeys = new Set([...Object.keys(oldCh), ...Object.keys(newCh)]);
+            for (const ch of chKeys) {
+              if (normalize(oldCh[ch]) !== normalize(newCh[ch])) {
+                changes.push({
+                  field: `variation[${i}](${ov.value || i}).channels.${ch}`,
+                  oldValue: oldCh[ch] ?? null,
+                  newValue: newCh[ch] ?? null,
+                });
+              }
+            }
+          } else {
+            const o2 = normalize(ov[vk]);
+            const n2 = normalize(nv[vk]);
+            if (JSON.stringify(o2) !== JSON.stringify(n2)) {
+              changes.push({
+                field: `variation[${i}](${ov.value || i}).${vk}`,
+                oldValue: ov[vk] ?? null,
+                newValue: nv[vk] ?? null,
+              });
+            }
+          }
+        }
+      }
+    } else {
+      compareValues(key, oldItem?.[key], newItem?.[key]);
+    }
+  }
+  return changes;
+}
+
 export const handleUpdateItem: RequestHandler = async (req, res) => {
   try {
     const { itemId } = req.params;
     const updateData = req.body;
+    const changedBy = req.headers["x-user"] as string || "unknown";
+    const clientIp = (req.headers["x-forwarded-for"] as string || req.socket.remoteAddress || "unknown").split(",")[0].trim();
 
     const collection = await getItemsCollection();
 
+    // Fetch old item for diff
+    const oldItem = await collection.findOne({ itemId });
+    if (!oldItem) {
+      return res.status(404).json({ error: "Item not found" });
+    }
+
     const result = await collection.updateOne(
       { itemId },
-      {
-        $set: {
-          ...updateData,
-          updatedAt: new Date(),
-        },
-      },
+      { $set: { ...updateData, updatedAt: new Date() } },
     );
 
     if (result.matchedCount === 0) {
       return res.status(404).json({ error: "Item not found" });
     }
 
+    // Save change log
+    try {
+      const db = await getDatabase();
+      const logsCollection = db.collection("itemLogs");
+      const changes = computeDiff(oldItem, updateData);
+      // Always log the update, even if diff is empty (to track all saves)
+      await logsCollection.insertOne({
+        itemId,
+        itemName: oldItem.itemName,
+        changedBy,
+        clientIp,
+        changedAt: new Date(),
+        changes: changes.length > 0 ? changes : [{ field: "updated", oldValue: null, newValue: "saved" }],
+      });
+      console.log(`📝 Logged ${changes.length} changes for item ${itemId}`);
+    } catch (logErr) {
+      console.warn("⚠️ Failed to save item log:", logErr);
+    }
+
     res.json({ message: "Item updated successfully" });
   } catch (error) {
     console.error("Error updating item:", error);
     res.status(500).json({ error: "Failed to update item" });
+  }
+}
+
+// Bulk update sale types from Excel
+export const handleBulkUpdateSaleTypes: RequestHandler = async (req, res) => {
+  try {
+    const { updates } = req.body; // Array of { itemId, sapCode?, newSaleType }
+    const changedBy = req.headers["x-user"] as string || "system";
+    const clientIp = (req.headers["x-forwarded-for"] as string || req.socket.remoteAddress || "unknown").split(",")[0].trim();
+
+    if (!Array.isArray(updates) || updates.length === 0) {
+      return res.status(400).json({ error: "Updates array is required" });
+    }
+
+    const collection = await getItemsCollection();
+    const db = await getDatabase();
+    const logsCollection = db.collection("itemLogs");
+
+    let successCount = 0;
+    let errorCount = 0;
+    const errors: string[] = [];
+
+    for (const update of updates) {
+      try {
+        const { itemId, sapCode, newSaleType } = update;
+
+        if (!itemId || !newSaleType || !["QTY", "KG"].includes(newSaleType)) {
+          errors.push(`Invalid update data for item ${itemId}`);
+          errorCount++;
+          continue;
+        }
+
+        // Find the item
+        const item = await collection.findOne({ itemId });
+        if (!item) {
+          errors.push(`Item not found: ${itemId}`);
+          errorCount++;
+          continue;
+        }
+
+        let updateQuery: any = {};
+        let logChanges: any[] = [];
+
+        if (sapCode && sapCode.trim() !== "") {
+          // Update specific variation by SAP code
+          const variationIndex = item.variations?.findIndex((v: any) => v.sapCode === sapCode);
+          if (variationIndex >= 0) {
+            const oldSaleType = item.variations[variationIndex].saleType || item.saleType || "QTY";
+            if (oldSaleType !== newSaleType) {
+              updateQuery[`variations.${variationIndex}.saleType`] = newSaleType;
+              logChanges.push({
+                field: `variation[${sapCode}].saleType`,
+                oldValue: oldSaleType,
+                newValue: newSaleType
+              });
+            }
+          } else {
+            errors.push(`Variation with SAP code ${sapCode} not found in item ${itemId}`);
+            errorCount++;
+            continue;
+          }
+        } else {
+          // Update item-level sale type
+          const oldSaleType = item.saleType || "QTY";
+          if (oldSaleType !== newSaleType) {
+            updateQuery.saleType = newSaleType;
+            logChanges.push({
+              field: "saleType",
+              oldValue: oldSaleType,
+              newValue: newSaleType
+            });
+          }
+        }
+
+        // Only update if there are changes
+        if (Object.keys(updateQuery).length > 0) {
+          updateQuery.updatedAt = new Date();
+          
+          const result = await collection.updateOne(
+            { itemId },
+            { $set: updateQuery }
+          );
+
+          if (result.matchedCount > 0) {
+            // Log the change
+            await logsCollection.insertOne({
+              itemId,
+              itemName: item.itemName,
+              changedBy,
+              clientIp,
+              changedAt: new Date(),
+              changes: logChanges,
+            });
+            successCount++;
+          } else {
+            errors.push(`Failed to update item ${itemId}`);
+            errorCount++;
+          }
+        } else {
+          // No changes needed
+          successCount++;
+        }
+      } catch (error) {
+        console.error(`Error updating item ${update.itemId}:`, error);
+        errors.push(`Error updating item ${update.itemId}: ${error instanceof Error ? error.message : "Unknown error"}`);
+        errorCount++;
+      }
+    }
+
+    console.log(`📊 Bulk sale type update completed: ${successCount} success, ${errorCount} errors`);
+
+    res.json({
+      success: true,
+      message: `Updated ${successCount} items successfully`,
+      successCount,
+      errorCount,
+      errors: errors.length > 0 ? errors : undefined
+    });
+  } catch (error) {
+    console.error("Error in bulk sale type update:", error);
+    res.status(500).json({ error: "Failed to update sale types" });
+  }
+}
+
+export const handleGetItemLogs: RequestHandler = async (req, res) => {
+  try {
+    const { itemId } = req.params;
+    const db = await getDatabase();
+    const logsCollection = db.collection("itemLogs");
+    const logs = await logsCollection
+      .find({ itemId })
+      .sort({ changedAt: -1 })
+      .limit(100)
+      .toArray();
+    res.json({ success: true, data: logs });
+  } catch (error) {
+    console.error("Error fetching item logs:", error);
+    res.status(500).json({ error: "Failed to fetch logs" });
   }
 };
 

@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Upload, FileUp, AlertCircle, CheckCircle2, X, Trash2 } from "lucide-react";
+import { Upload, FileUp, AlertCircle, CheckCircle2, X, Trash2, Download } from "lucide-react";
 import * as XLSX from "xlsx";
 import { UPLOAD_FORMATS, validateFileFormat } from "@shared/formats";
 import type { UploadType } from "@shared/formats";
@@ -848,8 +848,75 @@ export default function UploadTab({ type }: UploadTabProps) {
               {/* Invalid Rows List */}
               {validationResult.invalidRows.length > 0 && (
                 <div className="border border-slate-700 rounded-lg overflow-hidden bg-slate-800/50 transition-colors duration-300 shadow-sm">
-                  <div className="bg-slate-900 px-3 py-2.5 border-b border-slate-700">
+                  <div className="bg-slate-900 px-3 py-2.5 border-b border-slate-700 flex items-center justify-between">
                     <p className="text-xs font-bold text-white tracking-wider">Invalid Rows</p>
+                    <button
+                      onClick={async () => {
+                        try {
+                          const XLSX = await import("xlsx");
+                          
+                          // Get column headers - try multiple sources
+                          let headers: string[] = [];
+                          
+                          // Try to get from fileData
+                          if (fileData?.headers && Array.isArray(fileData.headers)) {
+                            headers = fileData.headers;
+                          } 
+                          // Try to get from format definition using 'type' prop
+                          else if (type && UPLOAD_FORMATS[type as keyof typeof UPLOAD_FORMATS]) {
+                            headers = UPLOAD_FORMATS[type as keyof typeof UPLOAD_FORMATS].requiredColumns;
+                          }
+                          // Try to extract from first invalid row if it has column info
+                          else if (validationResult.invalidRows[0]?.headers) {
+                            headers = validationResult.invalidRows[0].headers;
+                          }
+                          
+                          console.log("📋 Headers for download:", headers);
+                          console.log("📊 Invalid rows count:", validationResult.invalidRows.length);
+                          
+                          // Map invalid rows to proper column structure
+                          const rows = validationResult.invalidRows.map((row: any) => {
+                            const rowObj: any = {
+                              "_Row_Number": row.rowIndex || "N/A",
+                              "_Error_Reason": row.reason || "Unknown error",
+                            };
+                            
+                            // Map data array to column headers
+                            if (Array.isArray(row.data) && headers.length > 0) {
+                              headers.forEach((header: string, idx: number) => {
+                                rowObj[header] = row.data[idx] !== undefined && row.data[idx] !== null ? row.data[idx] : "";
+                              });
+                            } else if (Array.isArray(row.data)) {
+                              // Fallback: create generic columns
+                              row.data.forEach((val: any, idx: number) => {
+                                rowObj[`Column_${idx + 1}`] = val !== undefined && val !== null ? val : "";
+                              });
+                            } else {
+                              // Last resort: dump as string
+                              rowObj["Raw_Data"] = String(row.data || "");
+                            }
+                            
+                            return rowObj;
+                          });
+                          
+                          console.log("✅ Prepared rows for Excel:", rows.length);
+                          
+                          const ws = XLSX.utils.json_to_sheet(rows);
+                          const wb = XLSX.utils.book_new();
+                          XLSX.utils.book_append_sheet(wb, ws, "Invalid Rows");
+                          XLSX.writeFile(wb, `Invalid_Rows_${type || "upload"}_${new Date().toISOString().split('T')[0]}.xlsx`);
+                          
+                          console.log("✅ Excel file downloaded successfully");
+                        } catch (error) {
+                          console.error("❌ Download failed:", error);
+                          alert(`Failed to download invalid rows: ${error instanceof Error ? error.message : "Unknown error"}`);
+                        }
+                      }}
+                      className="px-3 py-1 bg-red-600 hover:bg-red-500 text-white rounded text-xs font-bold transition-all flex items-center gap-1.5"
+                    >
+                      <Download className="w-3 h-3" />
+                      Download
+                    </button>
                   </div>
                   <div className="max-h-48 overflow-y-auto">
                     {validationResult.invalidRows.map((row: any, idx: number) => (

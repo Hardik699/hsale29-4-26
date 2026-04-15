@@ -1,5 +1,5 @@
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell, ComposedChart } from "recharts";
-import { TrendingUp, BarChart3 } from "lucide-react";
+import { TrendingUp, BarChart3, Download } from "lucide-react";
 import { useState } from "react";
 
 interface MonthlyData {
@@ -41,6 +41,10 @@ interface SalesChartsProps {
   comparisonRestaurantSales?: { [key: string]: number };
   dateRange?: { start: string; end: string };
   comparisonDateRange?: { start: string; end: string };
+  itemName?: string;
+  itemCategory?: string;
+  itemGroup?: string;
+  itemPrice?: number;
 }
 
 const RESTAURANT_COLORS = [
@@ -115,8 +119,651 @@ const CustomMonthlyTooltip = ({ active, payload, unitType = "units" }: any) => {
   return null;
 };
 
-export default function SalesCharts({ monthlyData, dateWiseData, restaurantSales = {}, unitType = "units" }: SalesChartsProps) {
+export default function SalesCharts({ 
+  monthlyData, 
+  dateWiseData, 
+  restaurantSales = {}, 
+  unitType = "units", 
+  dateRange,
+  itemName = "Item Name",
+  itemCategory = "Category",
+  itemGroup = "Group",
+  itemPrice = 0
+}: SalesChartsProps) {
   const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
+  const [downloadDateRange, setDownloadDateRange] = useState({ start: dateRange?.start || "", end: dateRange?.end || "" });
+
+  // Download Monthly Excel function
+  const downloadMonthlySalesExcel = async () => {
+    try {
+      const XLSX = await import("xlsx");
+      
+      if (!monthlyData || monthlyData.length === 0) {
+        alert("No monthly data available");
+        return;
+      }
+
+      // Filter monthly data to only include months within the selected date range
+      const startDate = new Date(downloadDateRange.start);
+      const endDate = new Date(downloadDateRange.end);
+      
+      const startYear = startDate.getFullYear();
+      const endYear = endDate.getFullYear();
+      const startMonth = startDate.getMonth(); // 0-based (Jan = 0)
+      const endMonth = endDate.getMonth();
+
+      // Get months within the date range
+      const monthsInRange = monthlyData.filter(monthData => {
+        const monthIndex = MONTH_NAMES.indexOf(monthData.month);
+        if (monthIndex === -1) return false;
+        
+        // For simplicity, assume all data is from the same year range
+        // You can enhance this logic if data spans multiple years
+        return monthIndex >= startMonth && monthIndex <= endMonth;
+      });
+
+      if (monthsInRange.length === 0) {
+        alert("No monthly data available for selected date range");
+        return;
+      }
+
+      // Create header rows
+      const headerRow1: any[] = ["restaurant_name", "brand_grouping", "item_name", "category_name"];
+      const headerRow2: any[] = ["", "", "", ""];
+
+      // Add month headers with Online/Offline sub-columns
+      monthsInRange.forEach((monthData) => {
+        headerRow1.push(monthData.month, "");
+        headerRow2.push("Online", "Offline");
+      });
+
+      // Add Total header
+      headerRow1.push("Total", "", "Unit");
+      headerRow2.push("Online", "Offline", "");
+
+      // Create data row
+      const dataRow: any[] = [
+        "HanuRam CCO",
+        itemGroup || "Sweet",
+        itemName,
+        itemCategory,
+      ];
+
+      let totalOnline = 0;
+      let totalOffline = 0;
+
+      // Add monthly data
+      monthsInRange.forEach((monthData) => {
+        const online = (monthData.zomatoQty || 0) + (monthData.swiggyQty || 0);
+        const offline = (monthData.diningQty || 0) + (monthData.parcelQty || 0);
+        
+        dataRow.push(online, offline);
+        totalOnline += online;
+        totalOffline += offline;
+      });
+
+      // Add totals
+      dataRow.push(totalOnline, totalOffline);
+      dataRow.push(unitType && unitType.toLowerCase().includes("kg") ? "KG" : "PC");
+
+      // Create worksheet
+      const ws = XLSX.utils.aoa_to_sheet([headerRow1, headerRow2, dataRow]);
+
+      // Merge cells for month headers and Total header
+      const merges: any[] = [];
+      let colIndex = 4; // Start after first 4 columns
+
+      // Merge month headers
+      monthsInRange.forEach(() => {
+        merges.push({
+          s: { r: 0, c: colIndex },
+          e: { r: 0, c: colIndex + 1 },
+        });
+        colIndex += 2;
+      });
+
+      // Merge Total header
+      merges.push({
+        s: { r: 0, c: colIndex },
+        e: { r: 0, c: colIndex + 1 },
+      });
+
+      ws["!merges"] = merges;
+
+      // Add column widths
+      const colWidths = [
+        { wch: 18 }, // restaurant_name
+        { wch: 15 }, // brand_grouping
+        { wch: 25 }, // item_name
+        { wch: 18 }, // category_name
+      ];
+
+      // Add widths for month columns
+      monthsInRange.forEach(() => {
+        colWidths.push({ wch: 10 }); // Online
+        colWidths.push({ wch: 10 }); // Offline
+      });
+
+      colWidths.push({ wch: 10 }); // Total Online
+      colWidths.push({ wch: 10 }); // Total Offline
+      colWidths.push({ wch: 8 }); // Unit
+
+      ws["!cols"] = colWidths;
+
+      // Apply styling to all cells
+      const range = XLSX.utils.decode_range(ws["!ref"] || "A1");
+
+      for (let R = range.s.r; R <= range.e.r; ++R) {
+        for (let C = range.s.c; C <= range.e.c; ++C) {
+          const cellAddress = XLSX.utils.encode_cell({ r: R, c: C });
+          if (!ws[cellAddress]) continue;
+
+          // Initialize cell style
+          ws[cellAddress].s = {
+            alignment: { horizontal: "center", vertical: "center" },
+            border: {
+              top: { style: "thin", color: { rgb: "000000" } },
+              bottom: { style: "thin", color: { rgb: "000000" } },
+              left: { style: "thin", color: { rgb: "000000" } },
+              right: { style: "thin", color: { rgb: "000000" } },
+            },
+          };
+
+          // Header row 1 styling (months and Total)
+          if (R === 0) {
+            ws[cellAddress].s.fill = { fgColor: { rgb: "4472C4" } };
+            ws[cellAddress].s.font = { bold: true, color: { rgb: "FFFFFF" }, sz: 12 };
+          }
+          // Header row 2 styling (Online/Offline)
+          else if (R === 1) {
+            ws[cellAddress].s.fill = { fgColor: { rgb: "8FAADC" } };
+            ws[cellAddress].s.font = { bold: true, color: { rgb: "FFFFFF" }, sz: 11 };
+          }
+          // Data row styling
+          else {
+            ws[cellAddress].s.fill = { fgColor: { rgb: "FFFFFF" } };
+            ws[cellAddress].s.font = { sz: 11 };
+          }
+        }
+      }
+
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Monthly Sales");
+
+      // Download with styling
+      XLSX.writeFile(
+        wb,
+        `Monthly_Sales_${itemName}_${downloadDateRange.start}_to_${downloadDateRange.end}.xlsx`,
+        {
+          bookType: "xlsx",
+          cellStyles: true,
+        }
+      );
+
+    } catch (error) {
+      console.error("Monthly download failed:", error);
+      alert("Failed to download monthly Excel file");
+    }
+  };
+
+  // Download Weekly Excel function
+  const downloadWeeklySalesExcel = async () => {
+    try {
+      const XLSX = await import("xlsx");
+      
+      // Filter data by date range
+      const filteredData = (dateWiseData || []).filter(d => {
+        return d.date >= downloadDateRange.start && d.date <= downloadDateRange.end;
+      });
+
+      if (filteredData.length === 0) {
+        alert("No data available for selected date range");
+        return;
+      }
+
+      // Group data by weeks
+      const startDate = new Date(downloadDateRange.start);
+      const endDate = new Date(downloadDateRange.end);
+      
+      // Generate weekly ranges
+      const weeklyRanges: Array<{ start: Date; end: Date; label: string }> = [];
+      let currentWeekStart = new Date(startDate);
+      
+      while (currentWeekStart <= endDate) {
+        const currentWeekEnd = new Date(currentWeekStart);
+        currentWeekEnd.setDate(currentWeekEnd.getDate() + 6); // Add 6 days to get end of week
+        
+        if (currentWeekEnd > endDate) {
+          currentWeekEnd.setTime(endDate.getTime());
+        }
+        
+        const startLabel = currentWeekStart.toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric" });
+        const endLabel = currentWeekEnd.toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric" });
+        
+        weeklyRanges.push({
+          start: new Date(currentWeekStart),
+          end: new Date(currentWeekEnd),
+          label: `${startLabel} To ${endLabel}`
+        });
+        
+        // Move to next week
+        currentWeekStart.setDate(currentWeekStart.getDate() + 7);
+      }
+
+      // Aggregate data by weeks
+      const weeklyData: { [key: string]: { online: number; offline: number } } = {};
+      
+      weeklyRanges.forEach((week, index) => {
+        const weekKey = `week_${index}`;
+        weeklyData[weekKey] = { online: 0, offline: 0 };
+        
+        filteredData.forEach(d => {
+          const dataDate = new Date(d.date);
+          if (dataDate >= week.start && dataDate <= week.end) {
+            const online = (d.zomatoQty || 0) + (d.swiggyQty || 0);
+            const offline = (d.diningQty || 0) + (d.parcelQty || 0);
+            
+            weeklyData[weekKey].online += online;
+            weeklyData[weekKey].offline += offline;
+          }
+        });
+      });
+
+      // Create header rows
+      const headerRow1: any[] = ["restaurant_name", "brand_grouping", "item_name", "category_name"];
+      const headerRow2: any[] = ["", "", "", ""];
+
+      // Add weekly headers
+      weeklyRanges.forEach((week) => {
+        headerRow1.push(week.label, "");
+        headerRow2.push("Online", "Offline");
+      });
+
+      // Add Total header
+      headerRow1.push("Total", "", "Unit");
+      headerRow2.push("Online", "Offline", "");
+
+      // Create data row
+      const dataRow: any[] = [
+        "HanuRam CCO",
+        itemGroup || "Sweet",
+        itemName,
+        itemCategory,
+      ];
+
+      let totalOnline = 0;
+      let totalOffline = 0;
+
+      // Add weekly data
+      weeklyRanges.forEach((_, index) => {
+        const weekKey = `week_${index}`;
+        const online = weeklyData[weekKey].online;
+        const offline = weeklyData[weekKey].offline;
+        
+        dataRow.push(online, offline);
+        totalOnline += online;
+        totalOffline += offline;
+      });
+
+      // Add totals
+      dataRow.push(totalOnline, totalOffline);
+      dataRow.push(unitType && unitType.toLowerCase().includes("kg") ? "KG" : "PC");
+
+      // Create worksheet
+      const ws = XLSX.utils.aoa_to_sheet([headerRow1, headerRow2, dataRow]);
+
+      // Merge cells for weekly headers and Total header
+      const merges: any[] = [];
+      let colIndex = 4; // Start after first 4 columns
+
+      // Merge weekly headers
+      weeklyRanges.forEach(() => {
+        merges.push({
+          s: { r: 0, c: colIndex },
+          e: { r: 0, c: colIndex + 1 },
+        });
+        colIndex += 2;
+      });
+
+      // Merge Total header
+      merges.push({
+        s: { r: 0, c: colIndex },
+        e: { r: 0, c: colIndex + 1 },
+      });
+
+      ws["!merges"] = merges;
+
+      // Add column widths
+      const colWidths = [
+        { wch: 18 }, // restaurant_name
+        { wch: 15 }, // brand_grouping
+        { wch: 25 }, // item_name
+        { wch: 18 }, // category_name
+      ];
+
+      // Add widths for weekly columns
+      weeklyRanges.forEach(() => {
+        colWidths.push({ wch: 12 }); // Online
+        colWidths.push({ wch: 12 }); // Offline
+      });
+
+      colWidths.push({ wch: 12 }); // Total Online
+      colWidths.push({ wch: 12 }); // Total Offline
+      colWidths.push({ wch: 8 }); // Unit
+
+      ws["!cols"] = colWidths;
+
+      // Apply styling to all cells
+      const range = XLSX.utils.decode_range(ws["!ref"] || "A1");
+
+      for (let R = range.s.r; R <= range.e.r; ++R) {
+        for (let C = range.s.c; C <= range.e.c; ++C) {
+          const cellAddress = XLSX.utils.encode_cell({ r: R, c: C });
+          if (!ws[cellAddress]) continue;
+
+          // Initialize cell style
+          ws[cellAddress].s = {
+            alignment: { horizontal: "center", vertical: "center" },
+            border: {
+              top: { style: "thin", color: { rgb: "000000" } },
+              bottom: { style: "thin", color: { rgb: "000000" } },
+              left: { style: "thin", color: { rgb: "000000" } },
+              right: { style: "thin", color: { rgb: "000000" } },
+            },
+          };
+
+          // Header row 1 styling (weekly ranges and Total)
+          if (R === 0) {
+            ws[cellAddress].s.fill = { fgColor: { rgb: "4472C4" } };
+            ws[cellAddress].s.font = { bold: true, color: { rgb: "FFFFFF" }, sz: 12 };
+          }
+          // Header row 2 styling (Online/Offline)
+          else if (R === 1) {
+            ws[cellAddress].s.fill = { fgColor: { rgb: "8FAADC" } };
+            ws[cellAddress].s.font = { bold: true, color: { rgb: "FFFFFF" }, sz: 11 };
+          }
+          // Data row styling
+          else {
+            ws[cellAddress].s.fill = { fgColor: { rgb: "FFFFFF" } };
+            ws[cellAddress].s.font = { sz: 11 };
+          }
+        }
+      }
+
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, "Weekly Sales");
+
+      // Download with styling
+      XLSX.writeFile(
+        wb,
+        `Weekly_Sales_${itemName}_${downloadDateRange.start}_to_${downloadDateRange.end}.xlsx`,
+        {
+          bookType: "xlsx",
+          cellStyles: true,
+        }
+      );
+
+    } catch (error) {
+      console.error("Weekly download failed:", error);
+      alert("Failed to download weekly Excel file");
+    }
+  };
+
+  // Download Excel function with Online/Offline split and styling
+  const downloadDailySalesExcel = async (downloadType: "item" | "category") => {
+    try {
+      const XLSX = await import("xlsx");
+      
+      // Fetch data based on download type
+      let apiUrl = "";
+      if (downloadType === "item") {
+        // Download only this item's data - use existing dateWiseData
+        const filteredData = (dateWiseData || []).filter(d => {
+          return d.date >= downloadDateRange.start && d.date <= downloadDateRange.end;
+        });
+
+        if (filteredData.length === 0) {
+          alert("No data available for selected date range");
+          return;
+        }
+
+        // Create Excel for single item
+        const headerRow1: any[] = ["restaurant_name", "brand_grouping", "item_name", "category_name"];
+        const headerRow2: any[] = ["", "", "", ""];
+
+        // Add date headers
+        filteredData.forEach((d) => {
+          const formatted = new Date(d.date).toLocaleDateString("en-GB");
+          headerRow1.push(formatted, "");
+          headerRow2.push("Online", "Offline");
+        });
+
+        // Add Total header
+        headerRow1.push("Total", "", "Unit");
+        headerRow2.push("Online", "Offline", "");
+
+        // Create data row
+        const dataRow: any[] = [
+          "HanuRam CCO",
+          itemGroup || "Sweet",
+          itemName,
+          itemCategory,
+        ];
+
+        let totalOnline = 0;
+        let totalOffline = 0;
+
+        filteredData.forEach((d) => {
+          const online = (d.zomatoQty || 0) + (d.swiggyQty || 0);
+          const offline = (d.diningQty || 0) + (d.parcelQty || 0);
+          dataRow.push(online, offline);
+          totalOnline += online;
+          totalOffline += offline;
+        });
+
+        dataRow.push(totalOnline, totalOffline);
+        dataRow.push(unitType && unitType.toLowerCase().includes("kg") ? "KG" : "PC");
+
+        // Create worksheet
+        const ws = XLSX.utils.aoa_to_sheet([headerRow1, headerRow2, dataRow]);
+
+        // Merge cells
+        const merges: any[] = [];
+        let colIndex = 4;
+        filteredData.forEach(() => {
+          merges.push({ s: { r: 0, c: colIndex }, e: { r: 0, c: colIndex + 1 } });
+          colIndex += 2;
+        });
+        merges.push({ s: { r: 0, c: colIndex }, e: { r: 0, c: colIndex + 1 } });
+        ws["!merges"] = merges;
+
+        // Column widths
+        const colWidths = [{ wch: 18 }, { wch: 15 }, { wch: 25 }, { wch: 18 }];
+        filteredData.forEach(() => {
+          colWidths.push({ wch: 10 }, { wch: 10 });
+        });
+        colWidths.push({ wch: 10 }, { wch: 10 }, { wch: 8 });
+        ws["!cols"] = colWidths;
+
+        // Apply styling
+        const range = XLSX.utils.decode_range(ws["!ref"] || "A1");
+        for (let R = range.s.r; R <= range.e.r; ++R) {
+          for (let C = range.s.c; C <= range.e.c; ++C) {
+            const cellAddress = XLSX.utils.encode_cell({ r: R, c: C });
+            if (!ws[cellAddress]) continue;
+
+            ws[cellAddress].s = {
+              alignment: { horizontal: "center", vertical: "center" },
+              border: {
+                top: { style: "thin", color: { rgb: "000000" } },
+                bottom: { style: "thin", color: { rgb: "000000" } },
+                left: { style: "thin", color: { rgb: "000000" } },
+                right: { style: "thin", color: { rgb: "000000" } },
+              },
+            };
+
+            if (R === 0) {
+              ws[cellAddress].s.fill = { fgColor: { rgb: "4472C4" } };
+              ws[cellAddress].s.font = { bold: true, color: { rgb: "FFFFFF" }, sz: 12 };
+            } else if (R === 1) {
+              ws[cellAddress].s.fill = { fgColor: { rgb: "8FAADC" } };
+              ws[cellAddress].s.font = { bold: true, color: { rgb: "FFFFFF" }, sz: 11 };
+            } else {
+              ws[cellAddress].s.fill = { fgColor: { rgb: "FFFFFF" } };
+              ws[cellAddress].s.font = { sz: 11 };
+            }
+          }
+        }
+
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Daily Sales");
+        XLSX.writeFile(wb, `Daily_Sales_${itemName}_${downloadDateRange.start}_to_${downloadDateRange.end}.xlsx`, {
+          bookType: "xlsx",
+          cellStyles: true,
+        });
+
+      } else {
+        // Download category data - fetch from API
+        apiUrl = `/api/sales/daily-report?startDate=${downloadDateRange.start}&endDate=${downloadDateRange.end}&category=${encodeURIComponent(itemCategory)}`;
+        
+        const response = await fetch(apiUrl);
+        if (!response.ok) {
+          throw new Error("Failed to fetch sales data");
+        }
+
+        const data = await response.json();
+        if (!data.success || !data.data || data.data.length === 0) {
+          alert("No data available for selected date range and category");
+          return;
+        }
+
+        // Group data by item
+        const itemMap: any = {};
+        data.data.forEach((sale: any) => {
+          const itemKey = `${sale.itemName}_${sale.category}`;
+          if (!itemMap[itemKey]) {
+            itemMap[itemKey] = {
+              itemName: sale.itemName,
+              category: sale.category,
+              group: sale.group || "N/A",
+              dates: {},
+            };
+          }
+
+          const dateKey = sale.date;
+          if (!itemMap[itemKey].dates[dateKey]) {
+            itemMap[itemKey].dates[dateKey] = { online: 0, offline: 0 };
+          }
+
+          const online = (sale.zomatoQty || 0) + (sale.swiggyQty || 0);
+          const offline = (sale.diningQty || 0) + (sale.parcelQty || 0);
+
+          itemMap[itemKey].dates[dateKey].online += online;
+          itemMap[itemKey].dates[dateKey].offline += offline;
+        });
+
+        // Get all unique dates sorted
+        const allDates = Array.from(new Set(data.data.map((sale: any) => sale.date))).sort();
+
+        // Create header rows
+        const headerRow1: any[] = ["restaurant_name", "brand_grouping", "item_name", "category_name"];
+        const headerRow2: any[] = ["", "", "", ""];
+
+        allDates.forEach((date: string) => {
+          const formatted = new Date(date).toLocaleDateString("en-GB");
+          headerRow1.push(formatted, "");
+          headerRow2.push("Online", "Offline");
+        });
+
+        headerRow1.push("Total", "", "Unit");
+        headerRow2.push("Online", "Offline", "");
+
+        // Create data rows
+        const dataRows: any[] = [];
+        Object.values(itemMap).forEach((item: any) => {
+          const row: any[] = ["HanuRam CCO", item.group, item.itemName, item.category];
+
+          let totalOnline = 0;
+          let totalOffline = 0;
+
+          allDates.forEach((date: string) => {
+            const online = item.dates[date]?.online || 0;
+            const offline = item.dates[date]?.offline || 0;
+            row.push(online, offline);
+            totalOnline += online;
+            totalOffline += offline;
+          });
+
+          row.push(totalOnline, totalOffline, "KG");
+          dataRows.push(row);
+        });
+
+        // Sort by item name
+        dataRows.sort((a, b) => a[2].localeCompare(b[2]));
+
+        // Create worksheet
+        const ws = XLSX.utils.aoa_to_sheet([headerRow1, headerRow2, ...dataRows]);
+
+        // Merge cells
+        const merges: any[] = [];
+        let colIndex = 4;
+        allDates.forEach(() => {
+          merges.push({ s: { r: 0, c: colIndex }, e: { r: 0, c: colIndex + 1 } });
+          colIndex += 2;
+        });
+        merges.push({ s: { r: 0, c: colIndex }, e: { r: 0, c: colIndex + 1 } });
+        ws["!merges"] = merges;
+
+        // Column widths
+        const colWidths = [{ wch: 18 }, { wch: 15 }, { wch: 25 }, { wch: 18 }];
+        allDates.forEach(() => {
+          colWidths.push({ wch: 10 }, { wch: 10 });
+        });
+        colWidths.push({ wch: 10 }, { wch: 10 }, { wch: 8 });
+        ws["!cols"] = colWidths;
+
+        // Apply styling
+        const range = XLSX.utils.decode_range(ws["!ref"] || "A1");
+        for (let R = range.s.r; R <= range.e.r; ++R) {
+          for (let C = range.s.c; C <= range.e.c; ++C) {
+            const cellAddress = XLSX.utils.encode_cell({ r: R, c: C });
+            if (!ws[cellAddress]) continue;
+
+            ws[cellAddress].s = {
+              alignment: { horizontal: "center", vertical: "center" },
+              border: {
+                top: { style: "thin", color: { rgb: "000000" } },
+                bottom: { style: "thin", color: { rgb: "000000" } },
+                left: { style: "thin", color: { rgb: "000000" } },
+                right: { style: "thin", color: { rgb: "000000" } },
+              },
+            };
+
+            if (R === 0) {
+              ws[cellAddress].s.fill = { fgColor: { rgb: "4472C4" } };
+              ws[cellAddress].s.font = { bold: true, color: { rgb: "FFFFFF" }, sz: 12 };
+            } else if (R === 1) {
+              ws[cellAddress].s.fill = { fgColor: { rgb: "8FAADC" } };
+              ws[cellAddress].s.font = { bold: true, color: { rgb: "FFFFFF" }, sz: 11 };
+            } else {
+              ws[cellAddress].s.fill = { fgColor: { rgb: "FFFFFF" } };
+              ws[cellAddress].s.font = { sz: 11 };
+            }
+          }
+        }
+
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, "Daily Sales");
+        XLSX.writeFile(wb, `Daily_Sales_${itemCategory}_${downloadDateRange.start}_to_${downloadDateRange.end}.xlsx`, {
+          bookType: "xlsx",
+          cellStyles: true,
+        });
+      }
+    } catch (error) {
+      console.error("Download failed:", error);
+      alert("Failed to download Excel file");
+    }
+  };
 
   // Create tooltip component with unitType bound
   const TooltipWithUnit = (props: any) => <CustomMonthlyTooltip {...props} unitType={unitType} />;
@@ -246,6 +893,55 @@ export default function SalesCharts({ monthlyData, dateWiseData, restaurantSales
                 ✕ Clear Filter
               </button>
             )}
+          </div>
+
+          {/* Download Section */}
+          <div className="bg-gray-800/40 border border-gray-700/50 rounded-xl p-4 mb-6">
+            <div className="flex flex-col sm:flex-row items-start sm:items-end gap-3">
+              <div className="flex-1 grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs text-gray-400 font-semibold mb-1.5 block">Start Date</label>
+                  <input
+                    type="date"
+                    value={downloadDateRange.start}
+                    onChange={(e) => setDownloadDateRange({ ...downloadDateRange, start: e.target.value })}
+                    className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm focus:border-blue-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="text-xs text-gray-400 font-semibold mb-1.5 block">End Date</label>
+                  <input
+                    type="date"
+                    value={downloadDateRange.end}
+                    onChange={(e) => setDownloadDateRange({ ...downloadDateRange, end: e.target.value })}
+                    className="w-full px-3 py-2 bg-gray-900 border border-gray-700 rounded-lg text-white text-sm focus:border-blue-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => downloadDailySalesExcel("item")}
+                  className="px-5 py-2.5 bg-green-600 hover:bg-green-500 text-white rounded-lg font-bold text-sm transition-all flex items-center gap-2 shadow-lg shadow-green-900/30"
+                >
+                  <Download className="w-4 h-4" />
+                  Download Excel
+                </button>
+                <button
+                  onClick={() => downloadWeeklySalesExcel()}
+                  className="px-5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-bold text-sm transition-all flex items-center gap-2 shadow-lg shadow-blue-900/30"
+                >
+                  <Download className="w-4 h-4" />
+                  Weekly Data
+                </button>
+                <button
+                  onClick={() => downloadMonthlySalesExcel()}
+                  className="px-5 py-2.5 bg-purple-600 hover:bg-purple-500 text-white rounded-lg font-bold text-sm transition-all flex items-center gap-2 shadow-lg shadow-purple-900/30"
+                >
+                  <Download className="w-4 h-4" />
+                  Monthly Data
+                </button>
+              </div>
+            </div>
           </div>
 
           <div className="w-full h-96 bg-slate-900/50 rounded-xl p-6 border border-gray-800/30">

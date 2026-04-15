@@ -19,6 +19,8 @@ import Items from "./pages/Items";
 import ItemDetail from "./pages/ItemDetail";
 import ItemEdit from "./pages/ItemEdit";
 import WhiteScreen from "./pages/WhiteScreen";
+import Reports from "./pages/Reports";
+import DailySalesReport from "./pages/DailySalesReport";
 import ProtectedRoute from "./components/ProtectedRoute";
 import ProtectedLayout from "./components/ProtectedLayout";
 import NotFound from "./pages/NotFound";
@@ -76,6 +78,26 @@ const App = () => {
                 <ProtectedRoute>
                   <ProtectedLayout>
                     <Items />
+                  </ProtectedLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/reports"
+              element={
+                <ProtectedRoute>
+                  <ProtectedLayout>
+                    <Reports />
+                  </ProtectedLayout>
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/reports/daily-sales"
+              element={
+                <ProtectedRoute>
+                  <ProtectedLayout>
+                    <DailySalesReport />
                   </ProtectedLayout>
                 </ProtectedRoute>
               }
