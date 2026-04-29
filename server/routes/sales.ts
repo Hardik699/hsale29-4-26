@@ -50,29 +50,101 @@ export const handleGetSales: RequestHandler = async (req, res) => {
   try {
     const { itemId, startDate, endDate, channel } = req.query;
 
-    // This is a placeholder for future database integration
-    // For now, return an empty array or sample data
-    const filters: any = {};
+    // Check if we have any sales data in petpooja collection
+    const db = await getDatabase();
+    const petpoojaCollection = db.collection("petpooja");
+    const petpoojaDocs = await petpoojaCollection.find({}).toArray();
 
-    if (itemId) filters.itemId = itemId;
-    if (channel) filters.channel = channel;
-    if (startDate || endDate) {
-      filters.date = {};
-      if (startDate) filters.date.$gte = startDate;
-      if (endDate) filters.date.$lte = endDate;
+    if (!petpoojaDocs.length) {
+      return res.json({
+        success: true,
+        count: 0,
+        data: [],
+      });
     }
 
-    // TODO: Query from MongoDB collections.sales with filters
+    // Build item mapping to get variations
+    const itemsCollection = db.collection("items");
+    const items = await itemsCollection.find({}).toArray();
+    const sapCodeToVariation: { [sapCode: string]: any } = {};
+    items.forEach((item: any) => {
+      if (item.variations && Array.isArray(item.variations)) {
+        item.variations.forEach((variation: any) => {
+          if (variation.sapCode) {
+            sapCodeToVariation[variation.sapCode] = {
+              itemId: item.itemId,
+              variationName: variation.value || variation.name,
+            };
+          }
+        });
+      }
+    });
+
+    // Process petpooja data and collect sales records
     const salesRecords: SalesRecord[] = [];
+    const getColumnIndex = (headers: string[], name: string) =>
+      headers.findIndex((h) => h.toLowerCase().trim() === name.toLowerCase().trim());
+
+    for (const doc of petpoojaDocs) {
+      if (!Array.isArray(doc.data) || doc.data.length < 2) continue;
+
+      const headers = doc.data[0] as string[];
+      const dataRows = doc.data.slice(1);
+
+      const sapCodeIdx = getColumnIndex(headers, "sap_code");
+      const dateIdx = getColumnIndex(headers, "New Date");
+      const areaIdx = getColumnIndex(headers, "area");
+      const quantityIdx = getColumnIndex(headers, "item_quantity");
+      const priceIdx = getColumnIndex(headers, "item_price");
+
+      if (sapCodeIdx === -1) continue;
+
+      for (const row of dataRows) {
+        if (!Array.isArray(row)) continue;
+
+        const sapCode = row[sapCodeIdx]?.toString().trim() || "";
+        const variationData = sapCodeToVariation[sapCode];
+        if (!variationData) continue;
+
+        const dateStr = row[dateIdx]?.toString().trim() || "";
+        const recordDate = parseDate(dateStr);
+        if (!recordDate) continue;
+
+        const date = recordDate.toISOString().split('T')[0];
+        const area = areaIdx !== -1 ? row[areaIdx]?.toString().toLowerCase().trim() || "" : "";
+        const quantity = quantityIdx !== -1 ? parseFloat(row[quantityIdx]?.toString() || "0") || 0 : 0;
+        const value = priceIdx !== -1 ? parseFloat(row[priceIdx]?.toString() || "0") || 0 : 0;
+
+        // Apply filters
+        if (itemId && variationData.itemId !== itemId) continue;
+        if (startDate && date < startDate) continue;
+        if (endDate && date > endDate) continue;
+
+        const mappedChannel: "Dining" | "Parcel" | "Online" = normalizeArea(area) === "zomato" || normalizeArea(area) === "swiggy" ? "Online" : normalizeArea(area) === "parcel" ? "Parcel" : "Dining";
+        if (channel && mappedChannel.toLowerCase() !== channel.toString().toLowerCase()) continue;
+
+        salesRecords.push({
+          itemId: variationData.itemId,
+          variationId: sapCode,
+          channel: mappedChannel,
+          quantity,
+          value,
+          date,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        });
+      }
+    }
 
     res.json({
       success: true,
       count: salesRecords.length,
-      data: salesRecords,
+      data: salesRecords.slice(0, 1000), // Limit to 1000 records for performance
     });
   } catch (error) {
     const errorMessage =
       error instanceof Error ? error.message : "Unknown error";
+    console.error("Error in handleGetSales:", errorMessage);
     res.status(500).json({
       success: false,
       error: errorMessage,
@@ -517,39 +589,72 @@ export const handleGetSalesSummary: RequestHandler = async (req, res) => {
   try {
     const { startDate, endDate } = req.query;
 
-    // TODO: Aggregate sales data from MongoDB
+    const db = await getDatabase();
+    const petpoojaCollection = db.collection("petpooja");
+    const petpoojaDocs = await petpoojaCollection.find({}).toArray();
+
     const summary = {
       period: {
-        start: startDate,
-        end: endDate,
+        start: startDate || "N/A",
+        end: endDate || "N/A",
       },
       channels: {
-        dining: {
-          quantity: 0,
-          value: 0,
-        },
-        parcel: {
-          quantity: 0,
-          value: 0,
-        },
-        online: {
-          quantity: 0,
-          value: 0,
-        },
+        dining: { quantity: 0, value: 0 },
+        parcel: { quantity: 0, value: 0 },
+        online: { quantity: 0, value: 0 },
       },
-      total: {
-        quantity: 0,
-        value: 0,
-      },
+      total: { quantity: 0, value: 0 },
     };
 
-    res.json({
-      success: true,
-      data: summary,
-    });
+    if (!petpoojaDocs.length) {
+      return res.json({ success: true, data: summary });
+    }
+
+    const getColumnIndex = (headers: string[], name: string) =>
+      headers.findIndex((h) => h.toLowerCase().trim() === name.toLowerCase().trim());
+
+    const start = startDate ? parseDate(startDate as string) : new Date("2000-01-01");
+    const end = endDate ? parseDate(endDate as string) : new Date();
+
+    for (const doc of petpoojaDocs) {
+      if (!Array.isArray(doc.data) || doc.data.length < 2) continue;
+
+      const headers = doc.data[0] as string[];
+      const dataRows = doc.data.slice(1);
+
+      const dateIdx = getColumnIndex(headers, "New Date");
+      const areaIdx = getColumnIndex(headers, "area");
+      const quantityIdx = getColumnIndex(headers, "item_quantity");
+      const priceIdx = getColumnIndex(headers, "item_price");
+
+      if (dateIdx === -1) continue;
+
+      for (const row of dataRows) {
+        if (!Array.isArray(row)) continue;
+
+        const dateStr = row[dateIdx]?.toString().trim() || "";
+        const recordDate = parseDate(dateStr);
+        if (!recordDate || recordDate < start || recordDate > end) continue;
+
+        const area = areaIdx !== -1 ? row[areaIdx]?.toString().toLowerCase().trim() || "" : "";
+        const quantity = quantityIdx !== -1 ? parseFloat(row[quantityIdx]?.toString() || "0") || 0 : 0;
+        const value = priceIdx !== -1 ? parseFloat(row[priceIdx]?.toString() || "0") || 0 : 0;
+
+        const normalizedArea = normalizeArea(area);
+        const channelName = normalizedArea === "zomato" || normalizedArea === "swiggy" ? "online" : normalizedArea === "parcel" ? "parcel" : "dining";
+
+        summary.channels[channelName as keyof typeof summary.channels].quantity += quantity;
+        summary.channels[channelName as keyof typeof summary.channels].value += value;
+        summary.total.quantity += quantity;
+        summary.total.value += value;
+      }
+    }
+
+    res.json({ success: true, data: summary });
   } catch (error) {
     const errorMessage =
       error instanceof Error ? error.message : "Unknown error";
+    console.error("Error in handleGetSalesSummary:", errorMessage);
     res.status(500).json({
       success: false,
       error: errorMessage,
@@ -604,16 +709,13 @@ export const handleGetMonthlySales: RequestHandler = async (req, res) => {
   try {
     const { itemId } = req.params;
 
-    // TODO: Aggregate sales data by month from MongoDB
-    const monthlyData = [];
-
-    res.json({
-      success: true,
-      data: monthlyData,
-    });
+    // Use the item sales endpoint since it includes monthly data
+    const itemSalesResult = await handleGetItemSales(req, res);
+    return; // Response already sent by handleGetItemSales
   } catch (error) {
     const errorMessage =
       error instanceof Error ? error.message : "Unknown error";
+    console.error("Error in handleGetMonthlySales:", errorMessage);
     res.status(500).json({
       success: false,
       error: errorMessage,
@@ -626,13 +728,9 @@ export const handleGetDailySales: RequestHandler = async (req, res) => {
   try {
     const { itemId, month } = req.params;
 
-    // TODO: Aggregate sales data by day for the specified month from MongoDB
-    const dailyData = [];
-
-    res.json({
-      success: true,
-      data: dailyData,
-    });
+    // Use the item sales endpoint since it includes daily data
+    const itemSalesResult = await handleGetItemSales(req, res);
+    return; // Response already sent by handleGetItemSales
   } catch (error) {
     const errorMessage =
       error instanceof Error ? error.message : "Unknown error";

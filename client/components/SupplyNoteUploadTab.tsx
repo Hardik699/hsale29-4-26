@@ -50,9 +50,13 @@ export default function SupplyNoteUploadTab() {
   useEffect(() => {
     let mounted = true;
     fetch(`/api/supply-note/status?year=${selectedYear}`)
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error(`API returned ${r.status}`);
+        return r.json();
+      })
       .then((d) => { if (mounted && d.data) setMonthsStatus(d.data); })
-      .catch(() => {
+      .catch((err) => {
+        console.error(`Failed to fetch supply note status: ${err.message}`);
         if (mounted)
           setMonthsStatus(Array.from({ length: 12 }, (_, i) => ({ month: i + 1, status: "pending" as const })));
       });
@@ -61,9 +65,14 @@ export default function SupplyNoteUploadTab() {
 
   const refreshStatus = () => {
     fetch(`/api/supply-note/status?year=${selectedYear}`)
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error(`API returned ${r.status}`);
+        return r.json();
+      })
       .then((d) => { if (d.data) setMonthsStatus(d.data); })
-      .catch(() => {});
+      .catch((err) => {
+        console.error(`Failed to refresh supply note status: ${err.message}`);
+      });
   };
 
   const getMonthStatus = (m: number) =>

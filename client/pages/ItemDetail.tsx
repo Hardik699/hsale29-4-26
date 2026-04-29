@@ -64,9 +64,17 @@ export default function ItemDetail() {
     setLogsLoading(true);
     try {
       const res = await fetch(`/api/items/${itemId}/logs`);
+      if (!res.ok) {
+        console.error(`Failed to fetch logs: ${res.status}`);
+        setLogs([]);
+        return;
+      }
       const data = await res.json();
       setLogs(data.data || []);
-    } catch { setLogs([]); }
+    } catch (err) {
+      console.error("Error fetching logs:", err);
+      setLogs([]);
+    }
     finally { setLogsLoading(false); }
   };
 

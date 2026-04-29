@@ -90,7 +90,7 @@ export default function ItemsTable({ items, onDelete, onSelectedChange }: ItemsT
     );
   }
 
-  const CHANNELS = ["Dining", "Parcal", "Swiggy", "Zomato"];
+  const CHANNELS = ["Dining", "Parcale", "Swiggy", "Zomato"];
 
   return (
     <div className="space-y-4">
