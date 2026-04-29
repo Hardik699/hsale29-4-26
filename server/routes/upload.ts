@@ -1,14 +1,6 @@
 import { RequestHandler } from "express";
-import { MongoClient, Db } from "mongodb";
+import { getDatabase } from "../db";
 import { UPLOAD_FORMATS, validateFileFormat } from "../../shared/formats";
-
-const MONGODB_URI =
-  process.env.MONGODB_URI ||
-  "mongodb+srv://admin:admin1@cluster0.a3duo.mongodb.net/?appName=Cluster0";
-
-let cachedClient: MongoClient | null = null;
-let cachedDb: Db | null = null;
-let connectionPromise: Promise<Db> | null = null;
 
 // Temporary storage for chunks during chunked uploads - with better persistence
 const chunkStorage: Map<string, { 
@@ -41,41 +33,6 @@ setInterval(() => {
     sapCodeMapCache = null;
   }
 }, 30 * 60 * 1000);
-
-async function getDatabase(): Promise<Db> {
-  if (cachedDb) {
-    return cachedDb;
-  }
-
-  // Prevent multiple simultaneous connection attempts
-  if (connectionPromise) {
-    return connectionPromise;
-  }
-
-  connectionPromise = (async () => {
-    try {
-      const client = new MongoClient(MONGODB_URI, {
-        maxPoolSize: 10,
-        serverSelectionTimeoutMS: 10000,
-        connectTimeoutMS: 15000,
-        socketTimeoutMS: 300000, // 5 minutes for stable operations
-        family: 4, // Use IPv4
-      });
-
-      await client.connect();
-      console.log("✅ Connected to MongoDB");
-      cachedClient = client;
-      cachedDb = client.db("upload_system");
-      return cachedDb;
-    } catch (error) {
-      console.error("❌ Failed to connect to MongoDB:", error);
-      connectionPromise = null; // Reset for next attempt
-      throw new Error("Database connection failed: " + (error instanceof Error ? error.message : String(error)));
-    }
-  })();
-
-  return connectionPromise;
-}
 
 // Get cached SAP code map with TTL
 async function getSAPCodeMap(): Promise<Set<string>> {
@@ -422,7 +379,7 @@ export const handleGetUploads: RequestHandler = async (req, res) => {
       month: i + 1,
       status: "pending" as const
     }));
-    res.status(500).json({ data: monthsStatus, error: error instanceof Error ? error.message : "Server error" });
+    res.json({ data: monthsStatus });
   }
 };
 
@@ -1111,18 +1068,23 @@ export const handleFinalizeUpload: RequestHandler = async (req, res) => {
         throw dbError;
       }
     } else {
-      // Check if data already exists
+      // Check if data already exists (skip if isUpdate is true)
       try {
         const existingData = await collection.findOne({ year, month });
-        if (existingData) {
-          console.warn(`  ⚠️ Data already exists for ${storageKey}`);
+        if (existingData && !isUpdate) {
+          console.warn(`  ⚠️ Data already exists for ${storageKey} (not an update)`);
           return res.status(409).json({
             error: "Data already exists for this month",
             exists: true
           });
         }
 
-        console.log(`💾 Inserting new data for ${storageKey}: ${totalRows} rows`);
+        if (existingData && isUpdate) {
+          console.log(`🔄 Updating existing data for ${storageKey}: ${totalRows} rows`);
+          await collection.replaceOne({ year, month }, finalData);
+        } else {
+          console.log(`💾 Inserting new data for ${storageKey}: ${totalRows} rows`);
+        }
         
         // Check document size before inserting
         const documentSize = JSON.stringify(finalData).length;
@@ -1130,12 +1092,12 @@ export const handleFinalizeUpload: RequestHandler = async (req, res) => {
         console.log(`  📏 Document size: ${documentSizeMB} MB`);
         
         // If data is too large, split into multiple documents
-        if (documentSize > 5 * 1024 * 1024) { // Reduced to 5MB limit for safety
+        if (documentSize > 10 * 1024 * 1024) { // Increased to 10MB limit
           console.log(`  ⚠️ Document too large (${documentSizeMB} MB), splitting into parts...`);
           
           const headers = finalData[0];
           const dataRows = finalData.slice(1);
-          const ROWS_PER_PART = 8000; // Reduced from 15k to 8k rows per document
+          const ROWS_PER_PART = 15000; // Increased from 8k to 15k rows per document
           const totalParts = Math.ceil(dataRows.length / ROWS_PER_PART);
           
           console.log(`  📦 Splitting into ${totalParts} parts (${ROWS_PER_PART} rows each)`);
@@ -1173,18 +1135,35 @@ export const handleFinalizeUpload: RequestHandler = async (req, res) => {
           
           console.log(`✅ Data split and saved in ${totalParts} parts`);
         } else {
-          // Normal single document insert
-          const insertResult = await collection.insertOne({
-            year,
-            month,
-            rows: totalRows,
-            columns: metadata.columns,
-            data: finalData,
-            uploadedAt: new Date(),
-            status: "uploaded"
-          });
-          
-          console.log(`✅ Data inserted successfully, document ID: ${insertResult.insertedId}`);
+          // Normal single document insert or update
+          if (existingData && isUpdate) {
+            // Update existing document
+            const updateResult = await collection.replaceOne(
+              { year, month },
+              {
+                year,
+                month,
+                rows: totalRows,
+                columns: metadata.columns,
+                data: finalData,
+                uploadedAt: new Date(),
+                status: "uploaded"
+              }
+            );
+            console.log(`✅ Data updated successfully, modified: ${updateResult.modifiedCount}`);
+          } else {
+            // Insert new document
+            const insertResult = await collection.insertOne({
+              year,
+              month,
+              rows: totalRows,
+              columns: metadata.columns,
+              data: finalData,
+              uploadedAt: new Date(),
+              status: "uploaded"
+            });
+            console.log(`✅ Data inserted successfully, document ID: ${insertResult.insertedId}`);
+          }
         }
 
         // Process and create items from petpooja data

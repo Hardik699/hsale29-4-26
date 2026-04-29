@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Upload, FileUp, AlertCircle, CheckCircle2, X, Trash2, Download } from "lucide-react";
+import { Upload, FileUp, AlertCircle, CheckCircle2, X, Trash2, Download, Lock } from "lucide-react";
 import * as XLSX from "xlsx";
 import { UPLOAD_FORMATS, validateFileFormat } from "@shared/formats";
 import type { UploadType } from "@shared/formats";
@@ -47,6 +47,14 @@ export default function UploadTab({ type }: UploadTabProps) {
   const [deleteYear, setDeleteYear] = useState<number | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
+  // Clear all petpooja data state
+  const [showClearAllDialog, setShowClearAllDialog] = useState(false);
+  const [clearAllPassword, setClearAllPassword] = useState("");
+  const [clearAllPasswordError, setClearAllPasswordError] = useState("");
+  const [showClearAllPassword, setShowClearAllPassword] = useState(false);
+  const [isClearingAll, setIsClearingAll] = useState(false);
+  const [clearAllMessage, setClearAllMessage] = useState<{ type: "success" | "error"; text: string } | null>(null);
+
   // Background upload hook and context
   const { addUploadJob } = useBackgroundUpload();
   const { currentJob } = useUploadContext();
@@ -59,16 +67,22 @@ export default function UploadTab({ type }: UploadTabProps) {
     let isMounted = true;
     let timeoutId: NodeJS.Timeout | null = null;
 
+    // Set default pending status immediately
+    setMonthsStatus(Array.from({ length: 12 }, (_, i) => ({
+      month: i + 1,
+      status: "pending" as const
+    })));
+
     const fetchMonthStatus = async () => {
       const controller = new AbortController();
 
       try {
         console.log(`Fetching month status for ${type} year ${selectedYear}`);
 
-        // Add a timeout for the fetch request (30 seconds)
+        // Reduced timeout to 5 seconds
         timeoutId = setTimeout(() => {
           controller.abort();
-        }, 30000);
+        }, 5000);
 
         const response = await fetch(`/api/uploads?type=${type}&year=${selectedYear}`, {
           signal: controller.signal
@@ -81,17 +95,12 @@ export default function UploadTab({ type }: UploadTabProps) {
 
         if (!response.ok) {
           console.warn(`API returned status ${response.status}`);
-          if (isMounted) {
-            setMonthsStatus(Array.from({ length: 12 }, (_, i) => ({
-              month: i + 1,
-              status: "pending" as const
-            })));
-          }
           return;
         }
 
         const data = await response.json();
         if (isMounted && data.data && Array.isArray(data.data)) {
+          console.log(`✅ Loaded ${data.data.length} months status`);
           setMonthsStatus(data.data);
         }
       } catch (error) {
@@ -101,18 +110,13 @@ export default function UploadTab({ type }: UploadTabProps) {
         }
 
         if (error instanceof Error && error.name === "AbortError") {
-          // Silently ignore abort errors (timeout or cleanup)
+          console.warn("⏱️ API timeout - using default pending status");
           return;
         }
 
         // Only log if not cleaned up
         if (isMounted) {
           console.error("Failed to fetch month status:", error);
-          // Set default pending status on fetch error - don't block UI
-          setMonthsStatus(Array.from({ length: 12 }, (_, i) => ({
-            month: i + 1,
-            status: "pending" as const
-          })));
         }
       }
     };
@@ -696,6 +700,61 @@ export default function UploadTab({ type }: UploadTabProps) {
     setShowDeleteDialog(true);
   };
 
+  const handleClearAllData = async () => {
+    if (!clearAllPassword) {
+      setClearAllPasswordError("Password is required");
+      return;
+    }
+
+    const CLEAR_ALL_PASSWORD = "admin123";
+    if (clearAllPassword !== CLEAR_ALL_PASSWORD) {
+      setClearAllPasswordError("Incorrect password");
+      return;
+    }
+
+    try {
+      setIsClearingAll(true);
+      setClearAllPasswordError("");
+
+      const response = await fetch("/api/sales/clear-all", {
+        method: "DELETE",
+      });
+
+      const result = await response.json();
+
+      if (response.ok && result.success) {
+        setClearAllMessage({ type: "success", text: result.message });
+        setShowClearAllDialog(false);
+        setClearAllPassword("");
+
+        // Refresh month status
+        try {
+          const statusResponse = await fetch(`/api/uploads?type=${type}&year=${selectedYear}`);
+          if (statusResponse.ok) {
+            const data = await statusResponse.json();
+            if (data.data) {
+              setMonthsStatus(data.data);
+            }
+          }
+        } catch (statusError) {
+          console.error("Failed to refresh status:", statusError);
+        }
+      } else {
+        throw new Error(result.error || "Failed to clear data");
+      }
+    } catch (error) {
+      console.error("Clear all error:", error);
+      setClearAllMessage({
+        type: "error",
+        text: error instanceof Error ? error.message : "Failed to clear all data",
+      });
+      setShowClearAllDialog(false);
+      setClearAllPassword("");
+    } finally {
+      setIsClearingAll(false);
+    }
+  };
+
   return (
     <div className="space-y-6 sm:space-y-8">
       {/* Upload Loader Animation */}
@@ -998,6 +1057,13 @@ export default function UploadTab({ type }: UploadTabProps) {
         </div>
 
         <div className="p-5 sm:p-6 bg-gray-950">
+          {/* Debug info */}
+          {monthsStatus.length === 0 && (
+            <div className="text-yellow-400 text-sm mb-4 p-3 bg-yellow-900/20 border border-yellow-600/30 rounded-lg">
+              ⚠️ Loading month status...
+            </div>
+          )}
+          
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
             {MONTHS.map((month, idx) => {
               const monthNum = idx + 1;
@@ -1026,7 +1092,7 @@ export default function UploadTab({ type }: UploadTabProps) {
                         ? isBlueCard
                           ? "text-blue-100 group-hover:text-blue-50"
                           : "text-orange-100 group-hover:text-orange-50"
-                        : "text-white group-hover:text-slate-100"
+                        : "text-gray-100 group-hover:text-white"
                     }`}>{month}</p>
                     <div className="flex items-center gap-2.5 mb-4 flex-grow">
                       {isUploaded ? (
@@ -1040,8 +1106,8 @@ export default function UploadTab({ type }: UploadTabProps) {
                         </>
                       ) : (
                         <>
-                          <div className="w-3 h-3 rounded-full bg-slate-500 group-hover:animate-pulse transition-all duration-300"></div>
-                          <span className="text-xs sm:text-sm font-semibold text-slate-400 group-hover:text-slate-300 transition-colors duration-300">Pending</span>
+                          <div className="w-3 h-3 rounded-full bg-gray-400 group-hover:animate-pulse transition-all duration-300"></div>
+                          <span className="text-xs sm:text-sm font-semibold text-gray-300 group-hover:text-gray-100 transition-colors duration-300">Pending</span>
                         </>
                       )}
                     </div>
@@ -1066,6 +1132,131 @@ export default function UploadTab({ type }: UploadTabProps) {
           </div>
         </div>
       </div>
+
+      {/* Clear All Petpooja Data — danger zone */}
+      {type === "petpooja" && (
+        <div className="overflow-hidden border border-red-900/50 rounded-xl shadow-xl shadow-red-500/10">
+          <div className="bg-gradient-to-r from-red-950 to-red-900/80 px-6 sm:px-8 py-5 sm:py-6 rounded-t-xl border-b border-red-800/60">
+            <div className="flex items-start gap-4">
+              <div className="bg-red-800/50 p-2.5 rounded-lg mt-0.5">
+                <Trash2 className="w-6 h-6 text-red-300" />
+              </div>
+              <div className="flex-1">
+                <h2 className="text-xl sm:text-2xl font-bold text-red-100 tracking-tight mb-1">Danger Zone</h2>
+                <p className="text-red-300/80 text-sm font-normal">Irreversible actions — proceed with caution</p>
+              </div>
+            </div>
+          </div>
+
+          <div className="p-6 sm:p-7 bg-gray-950 space-y-4">
+            <div className="bg-red-950/40 border border-red-800/50 rounded-lg p-4">
+              <p className="text-sm font-bold text-red-200 mb-1">Remove All Petpooja Data</p>
+              <p className="text-xs text-red-300/70">
+                Permanently deletes <strong>all</strong> uploaded Petpooja records from the database across all months and years. This cannot be undone.
+              </p>
+            </div>
+
+            {/* Clear all message */}
+            {clearAllMessage && (
+              <div className={`p-3 rounded-lg flex gap-2.5 border ${
+                clearAllMessage.type === "success"
+                  ? "bg-green-900/20 border-green-600"
+                  : "bg-red-900/20 border-red-600"
+              }`}>
+                {clearAllMessage.type === "success"
+                  ? <CheckCircle2 className="w-5 h-5 text-green-400 flex-shrink-0" />
+                  : <AlertCircle className="w-5 h-5 text-red-400 flex-shrink-0" />}
+                <p className={`text-xs sm:text-sm font-semibold ${
+                  clearAllMessage.type === "success" ? "text-green-200" : "text-red-200"
+                }`}>
+                  {clearAllMessage.text}
+                </p>
+              </div>
+            )}
+
+            {!showClearAllDialog ? (
+              <button
+                onClick={() => {
+                  setShowClearAllDialog(true);
+                  setClearAllMessage(null);
+                  setClearAllPassword("");
+                  setClearAllPasswordError("");
+                }}
+                className="w-full px-4 py-3 bg-red-700/30 border border-red-600/60 text-red-300 font-semibold rounded-lg hover:bg-red-700/50 hover:border-red-500 hover:text-red-100 transition-all duration-300 text-sm flex items-center justify-center gap-2"
+              >
+                <Trash2 className="w-4 h-4" />
+                Remove All Petpooja Data
+              </button>
+            ) : (
+              <div className="space-y-4 border border-red-700/50 rounded-lg p-4 bg-red-950/30">
+                <p className="text-sm font-bold text-red-200 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-red-400" />
+                  Confirm deletion — enter password
+                </p>
+
+                <div className="relative">
+                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                  <input
+                    type={showClearAllPassword ? "text" : "password"}
+                    value={clearAllPassword}
+                    onChange={(e) => {
+                      setClearAllPassword(e.target.value);
+                      setClearAllPasswordError("");
+                    }}
+                    placeholder="Enter password"
+                    className="w-full pl-10 pr-16 py-2.5 border border-gray-600 rounded-lg bg-gray-800 text-white text-sm focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-red-500"
+                    disabled={isClearingAll}
+                    onKeyDown={(e) => e.key === "Enter" && handleClearAllData()}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowClearAllPassword(!showClearAllPassword)}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-gray-400 hover:text-gray-200"
+                    disabled={isClearingAll}
+                  >
+                    {showClearAllPassword ? "Hide" : "Show"}
+                  </button>
+                </div>
+
+                {clearAllPasswordError && (
+                  <p className="text-xs text-red-400 font-semibold">{clearAllPasswordError}</p>
+                )}
+
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => {
+                      setShowClearAllDialog(false);
+                      setClearAllPassword("");
+                      setClearAllPasswordError("");
+                    }}
+                    disabled={isClearingAll}
+                    className="flex-1 px-4 py-2 border border-gray-600 rounded-lg text-gray-300 font-semibold hover:bg-gray-800 disabled:opacity-50 transition text-sm"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleClearAllData}
+                    disabled={isClearingAll || !clearAllPassword}
+                    className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg font-semibold hover:bg-red-700 disabled:opacity-50 transition text-sm flex items-center justify-center gap-2"
+                  >
+                    {isClearingAll ? (
+                      <>
+                        <span className="inline-block animate-spin">⏳</span>
+                        Deleting...
+                      </>
+                    ) : (
+                      <>
+                        <Trash2 className="w-4 h-4" />
+                        Delete All
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

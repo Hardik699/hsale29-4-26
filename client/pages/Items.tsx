@@ -277,6 +277,7 @@ export default function Items() {
         // Row 1: Item Name, Group, Category (rowspan=2) + variation headers
         html += `<tr>`;
         html += `<th rowspan="2" style="${bs}background:#1e293b;color:#f1f5f9;font-weight:bold;padding:8px 10px;text-align:left;min-width:200px;">Item Name</th>`;
+        html += `<th rowspan="2" style="${bs}background:#1e293b;color:#f1f5f9;font-weight:bold;padding:8px 10px;text-align:center;">Supply Note SKU</th>`;
         html += `<th rowspan="2" style="${bs}background:#1e293b;color:#f1f5f9;font-weight:bold;padding:8px 10px;text-align:center;">Group</th>`;
         html += `<th rowspan="2" style="${bs}background:#1e293b;color:#f1f5f9;font-weight:bold;padding:8px 10px;text-align:center;">Category</th>`;
         allVariations.forEach((v) => {
@@ -298,6 +299,7 @@ export default function Items() {
           const bg = ri % 2 === 0 ? "#0f172a" : "#111827";
           html += `<tr>`;
           html += `<td style="${bs}background:${bg};color:#f1f5f9;font-weight:bold;padding:6px 10px;">${item.itemName || ""}</td>`;
+          html += `<td style="${bs}background:${bg};color:#cbd5e1;padding:6px 8px;text-align:center;">${item.supplyNoteSku || ""}</td>`;
           html += `<td style="${bs}background:${bg};color:#cbd5e1;padding:6px 8px;text-align:center;">${item.group || ""}</td>`;
           html += `<td style="${bs}background:${bg};color:#cbd5e1;padding:6px 8px;text-align:center;">${item.category || ""}</td>`;
           allVariations.forEach((v) => {
@@ -318,7 +320,7 @@ export default function Items() {
         const ws = XLSX.utils.table_to_sheet(table);
 
         ws["!cols"] = [
-          { wch: 28 }, { wch: 14 }, { wch: 20 },
+          { wch: 28 }, { wch: 16 }, { wch: 14 }, { wch: 20 },
           ...allVariations.flatMap(() => CHANNELS.map(() => ({ wch: 11 }))),
         ];
 

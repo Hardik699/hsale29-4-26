@@ -1,0 +1,50 @@
+Restaurant filter UI ko add karne ke liye:
+
+Line 632 ke baad (Category Selection ke baad) ye code add karo:
+
+```tsx
+          {/* Restaurant Filter */}
+          <div>
+            <h2 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+              🏪 Select Restaurant
+            </h2>
+            <select
+              value={selectedRestaurant}
+              onChange={(e) => setSelectedRestaurant(e.target.value)}
+              className="w-full px-4 py-3 bg-gray-800 border border-gray-700 rounded-lg text-white focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20 transition-all cursor-pointer"
+            >
+              <option value="all">All Restaurants</option>
+              {restaurants.map((restaurant) => (
+                <option key={restaurant} value={restaurant}>
+                  {restaurant}
+                </option>
+              ))}
+            </select>
+          </div>
+```
+
+Backend API endpoint banao:
+server/routes/sales.ts mein add karo:
+
+```typescript
+export const handleGetRestaurants: RequestHandler = async (req, res) => {
+  try {
+    const db = await getDatabase();
+    const collection = db.collection("petpooja");
+    
+    const restaurants = await collection.distinct("restaurant_name");
+    
+    res.json({ success: true, restaurants: restaurants.filter(Boolean).sort() });
+  } catch (error) {
+    console.error("Failed to fetch restaurants:", error);
+    res.status(500).json({ success: false, error: "Failed to fetch restaurants" });
+  }
+};
+```
+
+server/index.ts mein route add karo:
+```typescript
+app.get("/api/sales/restaurants", handleGetRestaurants);
+```
+
+Aur sales bulk API mein restaurant filter add karo (already done in fetchBulkSalesData).

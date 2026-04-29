@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Clear Upload Animation</title>
+</head>
+<body>
+    <h1>Clear Upload Animation</h1>
+    <button onclick="clearAnimation()">Clear Stuck Animation</button>
+    <div id="result"></div>
+
+    <script>
+        function clearAnimation() {
+            const resultDiv = document.getElementById('result');
+            
+            try {
+                // Clear localStorage
+                localStorage.removeItem('uploadJob');
+                localStorage.removeItem('currentUpload');
+                localStorage.removeItem('backgroundUpload');
+                
+                // Clear sessionStorage
+                sessionStorage.removeItem('uploadJob');
+                sessionStorage.removeItem('currentUpload');
+                sessionStorage.removeItem('backgroundUpload');
+                
+                // Force reload page
+                resultDiv.innerHTML = '✅ Animation cleared! Reloading page...';
+                
+                setTimeout(() => {
+                    window.location.reload();
+                }, 1000);
+                
+            } catch (error) {
+                resultDiv.innerHTML = `❌ Error: ${error.message}`;
+                console.error('Error:', error);
+            }
+        }
+        
+        // Auto-clear on page load
+        window.onload = function() {
+            console.log('Auto-clearing upload animation...');
+            clearAnimation();
+        };
+    </script>
+</body>
+</html>

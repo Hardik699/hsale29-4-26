@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Clear Petpooja Data</title>
+</head>
+<body>
+    <h1>Clear Petpooja Data</h1>
+    <button onclick="clearData()">Clear All Petpooja Data</button>
+    <div id="result"></div>
+
+    <script>
+        async function clearData() {
+            const resultDiv = document.getElementById('result');
+            resultDiv.innerHTML = 'Clearing data...';
+            
+            try {
+                const response = await fetch('/api/sales/clear-all', {
+                    method: 'DELETE'
+                });
+                
+                const data = await response.json();
+                
+                if (data.success) {
+                    resultDiv.innerHTML = `✅ Success: ${data.message}`;
+                    console.log('✅ Cleared:', data.deletedCount, 'documents');
+                } else {
+                    resultDiv.innerHTML = `❌ Error: ${data.error}`;
+                }
+            } catch (error) {
+                resultDiv.innerHTML = `❌ Error: ${error.message}`;
+                console.error('Error:', error);
+            }
+        }
+    </script>
+</body>
+</html>
