@@ -256,7 +256,7 @@ export default function Items() {
             return n(a) - n(b);
           });
 
-        const CHANNELS = ["Dining", "Parcal", "Swiggy", "Zomato"];
+        const CHANNELS = ["Dining", "Parcale", "Swiggy", "Zomato"];
 
         const getPrice = (item: any, varValue: string, channel: string): number | string => {
           const v = (item.variations || []).find((x: any) => x.value === varValue);

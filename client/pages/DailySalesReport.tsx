@@ -1,4 +1,4 @@
-﻿import { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 import { ArrowLeft, Download, TrendingUp } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 
@@ -142,7 +142,8 @@ export default function DailySalesReport() {
       }
       console.log(`âœ… Supply note qty: ${map.size} date-item records`);
       return map;
-    } catch {
+    } catch (err) {
+      console.error("Error fetching supply note qty:", err);
       return new Map();
     }
   };
